@@ -6,8 +6,30 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#97;&#x72;&#x73;&#49;&#52;&#56;&#x35;&#x30;&#64;&#x67;&#x6d;&#97;&#105;&#108;&#x2e;&#x63;&#111;&#x6d;">&#109;&#97;&#x72;&#x73;&#49;&#52;&#56;&#x35;&#x30;&#64;&#x67;&#x6d;&#97;&#105;&#108;&#x2e;&#x63;&#111;&#x6d;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#114;&#115;&#x31;&#x34;&#56;&#53;&#48;&#64;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;">&#x6d;&#x61;&#114;&#115;&#x31;&#x34;&#56;&#53;&#48;&#64;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
+      <categories>
+        <category>Other</category>
+      </categories>
+      <tags>
+        <tag>Other</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Hello World</title>
+    <url>/2022/01/31/Hello-World/</url>
+    <content><![CDATA[<h1 id="About-Hello-World"><a href="#About-Hello-World" class="headerlink" title="About Hello World"></a>About Hello World</h1><ul>
+<li>Hello World往往作为很多项目的初始示例程序，我个人把Hello World视为程序员对待“最初”的哲学，所以把它作为这个博客的第一篇博文的标题，用于给这个博客开个头（终于赶在过年前写出来了）。</li>
+</ul>
+<h1 id="About-Lost-Stars"><a href="#About-Lost-Stars" class="headerlink" title="About Lost Stars"></a>About Lost Stars</h1><ul>
+<li>Lost Stars是我个人最喜欢的Maroon 5的一首歌，歌词中表现了和“寄蜉蝣于天地，渺沧海之一粟”有着异曲同工之妙的对个体的渺小之感叹，和我个人目前的人生状态较为契合，所以把它作为这个博客的标题；</li>
+<li>后续应该主要会发布一些技术相关的主题，主要是作为自己的技术积累和总结，此外应该也会更新一些个人的游记；</li>
+<li>你可能是从我的简历或者我的Github主页来到这个博客，请主要关注技术相关的内容🙃；</li>
+<li>主页图片使用了之前从Bing首页保存下来的东京塔的照片，我个人很喜欢，如有侵权还请联系我；</li>
+<li>博客基于<a href="https://hexo.io/zh-cn/">hexo</a>构建，使用了<a href="https://github.com/Shen-Yu/hexo-theme-ayer">ayer主题</a>，感谢这两个开源项目；</li>
+<li>人生不易，随缘更新。</li>
+</ul>
+]]></content>
       <categories>
         <category>Other</category>
       </categories>
