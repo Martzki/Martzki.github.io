@@ -6,7 +6,7 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#56;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#x2e;&#x63;&#x6f;&#x6d;">&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#56;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#x2e;&#x63;&#x6f;&#x6d;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#97;&#114;&#115;&#49;&#52;&#56;&#x35;&#48;&#64;&#x67;&#x6d;&#97;&#x69;&#x6c;&#x2e;&#x63;&#111;&#x6d;">&#x6d;&#97;&#114;&#115;&#49;&#52;&#56;&#x35;&#48;&#64;&#x67;&#x6d;&#97;&#x69;&#x6c;&#x2e;&#x63;&#111;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
       <categories>
         <category>Other</category>
@@ -67,6 +67,77 @@
       </categories>
       <tags>
         <tag>Virtualization</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Virtio feature negotiation from QEMU perspective</title>
+    <url>/2022/02/06/Virtio-feature-negotiation-from-QEMU-perspective/</url>
+    <content><![CDATA[<h1 id="QEMU中的Virtio-features协商流程"><a href="#QEMU中的Virtio-features协商流程" class="headerlink" title="QEMU中的Virtio features协商流程"></a>QEMU中的Virtio features协商流程</h1><p>下面以virtio-net对接vhost-net（kernel）为例，分析整个Virtio features协商的过程。</p>
+<h2 id="vhost-net"><a href="#vhost-net" class="headerlink" title="vhost-net"></a>vhost-net</h2><p>vhost_net作为描述后端的数据结构，与真正使用的后端（vhost_user or vhost_net）对应。<br>每个vhost_net包含一个vhost_dev，vhost_net的features实际就是vhost_dev的features，与features相关的成员有：<code>features</code>，<code>acked_features</code>，<code>backend_features</code>和<code>protocol_features</code>：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_net</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> <span class="title">dev</span>;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_virtqueue</span> <span class="title">vqs</span>[2];</span></span><br><span class="line">    <span class="keyword">int</span> backend;</span><br><span class="line">    NetClientState *nc;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> &#123;</span></span><br><span class="line">……</span><br><span class="line">    <span class="keyword">uint64_t</span> features;</span><br><span class="line">    <span class="keyword">uint64_t</span> acked_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> backend_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> protocol_features;</span><br><span class="line">……</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<h3 id="vhost-dev-features"><a href="#vhost-dev-features" class="headerlink" title="vhost_dev::features"></a>vhost_dev::features</h3><p>在<code>vhost_dev_init</code>中，通过后端对应的接口（ioctl or unix socket），从后端获取到的后端支持的features。</p>
+<h3 id="vhost-dev-acked-features"><a href="#vhost-dev-acked-features" class="headerlink" title="vhost_dev::acked_features"></a>vhost_dev::acked_features</h3><p>前端依据从后端获取的host features进行协商，协商完成后真正向后端传递的features（过滤了后端不支持的features），即后端真正工作的features。</p>
+<h3 id="vhost-dev-backend-features"><a href="#vhost-dev-backend-features" class="headerlink" title="vhost_dev::backend_features"></a>vhost_dev::backend_features</h3><p>从命名看是描述后端的features，但和features字段重复。vhost-net相关的实际代码调用如下：</p>
+<ol>
+<li>vhost_net_ack_features: 在设置acked_features之前，用backend_features的值为acked_features初始化。这里acked_features为何不初始化为0，从QEMU开发者的邮件讨论看，之前在初始化0时，acked_features在在某些情况下会被初始化为unexpected value（This will result an unexpected value of acked_features which may fail the features setting of vhost.）。不过初始化为backend_features似乎在vdpa的场景下有新的问题，且问题仍然open中；<a href="https://bugs.launchpad.net/qemu/+bug/1924603">^1</a></li>
+<li>vhost_net_init: 在后端为vhost-net的条件下，如果后端对应的tap设备不支持vnet_hdr，则backend_features中的<code>VHOST_NET_F_VIRTIO_NET_HDR</code>被置位，否则为0；</li>
+<li>vhost_user_backend_init: 在后端为vhost-user的条件下，如果后端支持<code>VHOST_USER_F_PROTOCOL_FEATURES</code>，则backend_features中的<code>VHOST_USER_F_PROTOCOL_FEATURES</code>被置位。</li>
+</ol>
+<p>此外，内核vhost代码中定义了<code>VHOST_NET_BACKEND_FEATURES</code>，对应的ioctl操作为<code>VHOST_GET_BACKEND_FEATURES</code>和<code>VHOST_SET_BACKEND_FEATURES</code>，不过目前QEMU代码中没有这两个ioctl操作对应的逻辑。</p>
+<h3 id="vhost-dev-protocol-features"><a href="#vhost-dev-protocol-features" class="headerlink" title="vhost_dev::protocol_features"></a>vhost_dev::protocol_features</h3><p>协议的扩展features。为了保持向下兼容性，vhost-user协议新增的features使用protocol_features进行描述，由<code>VHOST_USER_F_PROTOCOL_FEATURES</code>进行控制，标识protocol_features是否使用。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VHOST_USER_F_PROTOCOL_FEATURES 30</span></span><br></pre></td></tr></table></figure>
+<p>在vhost-net场景下，protocol_features被设置为0。</p>
+<h2 id="virtio-net"><a href="#virtio-net" class="headerlink" title="virtio-net"></a>virtio-net</h2><p>virtio-net作为描述后端的数据结构，与Guest的前端驱动（virtio_net）对应。在QEMU中，用VirtIONet来描述virtio-net，每个VirtIONet结构中包含了其对应的VirtIODevice。其中与features有关的成员有：VirtIONet的<code>host_features</code>，VirtIODevice的<code>guest_features</code>，<code>host_features</code>和<code>backend_features</code>。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">VirtIONet</span> &#123;</span></span><br><span class="line">    VirtIODevice parent_obj;</span><br><span class="line">……</span><br><span class="line">    <span class="keyword">uint64_t</span> host_features;</span><br><span class="line">……</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">VirtIODevice</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">……</span><br><span class="line">    <span class="keyword">uint64_t</span> guest_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> host_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> backend_features;</span><br><span class="line">……</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<h3 id="VirtIONet-host-features"><a href="#VirtIONet-host-features" class="headerlink" title="VirtIONet::host_features"></a>VirtIONet::host_features</h3><p>从virtio设备的角度来看，只区分Guest与Host，并不关心Host的具体实现。所以VirtIONet::host_features代表了Host理论可以支持的所有features。</p>
+<p>VirtIONet::host_features在<code>virtio_net_class_init</code>中使用QEMU中virtio-net设备的默认属性<code>virtio_net_properties</code>（其中包含了offload相关的features）来初始化，同时在每个virtio-net设备实例化时，依据后端设备（e.g. tap）的配置，对部分features进行设置。</p>
+<p>VirtIONet::host_features唯一的调用处在<code>virtio_net_get_features</code>，即响应Guest前端驱动的get_features请求，VirtIONet::host_features作为初始值，在一系列的过滤动作后，向前端返回Host所支持的features（细节见下文）。</p>
+<h3 id="VirtIODevice-host-features"><a href="#VirtIODevice-host-features" class="headerlink" title="VirtIODevice::host_features"></a>VirtIODevice::host_features</h3><p>VirtIODevice::host_features在<code>virtio_bus_device_plugged</code>中调用对应virtio设备的get_features进行初始化，保存的是get_features的返回值，即真正返回给前端驱动的features。</p>
+<p><code>virtio_net_get_features</code>向前端返回features的逻辑如下：</p>
+<ol>
+<li>VirtIONet::host_features作为初始features；</li>
+<li>如果后端设备（e.g. tap）不支持vnet_hdr，则将features中对应的offload features取消置位；</li>
+<li>QEMU内部预定义了后端支持的feature_bits（kernel_feature_bits or user_feature_bits），将feature_bits支持但vhost_dev::features中不支持的bit在features中取消置位；</li>
+<li>对<code>VIRTIO_NET_F_MTU</code>进行特殊处理（和<code>mtu_bypass_backend</code>有关，对整体协商流程不重要）；</li>
+<li>将上述流程中处理后的features返回给前端驱动。</li>
+</ol>
+<p>要注意VirtIODevice::host_features和VirtIONet::host_features的区别，VirtIONet::host_features是Host理论可以支持的所有features，而VirtIODevice::host_features是对VirtIONet::host_features中依据后端、设备的设置进行处理后，真正返回给前端驱动的features。</p>
+<h3 id="VirtIODevice-guest-features"><a href="#VirtIODevice-guest-features" class="headerlink" title="VirtIODevice::guest_features"></a>VirtIODevice::guest_features</h3><p>Guest前端驱动用自身features和get_features得到的VirtIODevice::host_features进行协商后，传递给QEMU，与VirtIODevice::host_features取交集，保存得到guest_features。即前后端在Guest协商后得到的features。</p>
+<h3 id="VirtIODevice-backend-features"><a href="#VirtIODevice-backend-features" class="headerlink" title="VirtIODevice::backend_features"></a>VirtIODevice::backend_features</h3><p>看代码调用是为了特殊处理<code>mtu_bypass_backend</code>保存的，在<code>virtio_net_get_features</code>处理流程中，特殊处理<code>VIRTIO_NET_F_MTU</code>前保存的features，除了<code>VIRTIO_NET_F_MTU</code>和VirtIODevice::host_features有差异外，其他一致。</p>
+<h2 id="QEMU正常启动流程中的features协商"><a href="#QEMU正常启动流程中的features协商" class="headerlink" title="QEMU正常启动流程中的features协商"></a>QEMU正常启动流程中的features协商</h2><p>QEMU正常启动流程中，从开始运行到GuestOS启动的RunState的变化：<code>preconfig</code>-&gt;<code>prelaunch</code>-&gt;<code>running</code>。</p>
+<p>上述RunState变化过程中，virtio设备的features相关流程如下：</p>
+<ol>
+<li>preconfig: <code>qemu_init</code>-&gt;<code>net_init_clients</code>-&gt;……-&gt;<code>net_init_tap</code>-&gt;……-&gt;<code>vhost_net_init</code>，初始化tap和vhost_dev。其中vhost_dev初始化时，调用后端对应的接口，获取后端支持的所有features，用来初始化<code>vhost_dev::features</code>，同时依据对端设备（tap）支持的特性，初始化<code>vhost_dev::backend_features</code>，以及初始化<code>vhost_dev::protocol_features</code>为0；</li>
+<li>prelaunch: 调用<code>virtio_bus_device_plugged</code>，通过对应设备类型的get_features，初始化<code>VirtIODevice::host_features</code>；</li>
+<li>running: <ul>
+<li>GuestOS启动，内部virtio_net驱动被加载，调用<code>virtio_dev_probe</code>-&gt;……-&gt;<code>vp_get_features</code>获取设备的features，即QEMU侧的<code>VirtIODevice::host_features</code>，再与自身驱动支持的features进行协商，协商完成后调用<code>virtio_finalize_features</code>-&gt;……-&gt;<code>vp_set_features</code>将协商好的features传给QEMU；</li>
+<li>此时发生VM-EXIT，QEMU侧调用<code>virtio_set_features</code>-&gt;……-&gt;<code>virtio_net_set_features</code>-&gt;……-&gt;<code>vhost_ack_features</code>，把前端驱动传递过来的features和后端对应feature_bits共同支持的bit置位，将结果保存在<code>vhost_dev::acked_features</code>；</li>
+<li>GuestOS中<code>virtio_finalize_features</code>-&gt;……-&gt;<code>vp_set_features</code>执行完成后，会设置<code>VIRTIO_CONFIG_S_FEATURES_OK</code>，进而触发QEMU侧的对应调用<code>virtio_set_status</code>-&gt;……-&gt;<code>vhost_dev_start</code>。在<code>vhost_dev_start</code>中，调用<code>vhost_dev_set_features</code>，将前端协商好的<code>vhost_dev::acked_features</code>通过后端对应的接口传递到后端。</li>
+</ul>
+</li>
+</ol>
+<h2 id="QEMU热迁移流程中的features协商"><a href="#QEMU热迁移流程中的features协商" class="headerlink" title="QEMU热迁移流程中的features协商"></a>QEMU热迁移流程中的features协商</h2><p>QEMU热迁移流程中，源虚拟机从开始运行到迁移结束的RunState变化：<code>running</code>-&gt;<code>finish_migrate</code>-&gt;<code>postmigrate</code>；目的虚拟机从开始运行到GuestOS启动的RunState的变化：<code>preconfig</code>-&gt;<code>inmigrate</code>-&gt;<code>running</code>。</p>
+<h3 id="源端virtio-features在热迁移流程中的变化"><a href="#源端virtio-features在热迁移流程中的变化" class="headerlink" title="源端virtio features在热迁移流程中的变化"></a>源端virtio features在热迁移流程中的变化</h3><ol>
+<li>running: 正常运行状态，无相关操作；</li>
+<li>finish_migrate: <code>virtio_save</code>中保存<code>VirtIODevice::guest_features</code>的低32bit，迁移到目的端。</li>
+</ol>
+<h3 id="目的端virtio-features在热迁移流程中的变化"><a href="#目的端virtio-features在热迁移流程中的变化" class="headerlink" title="目的端virtio features在热迁移流程中的变化"></a>目的端virtio features在热迁移流程中的变化</h3><ol>
+<li>preconfig: 和正常启动流程一致；</li>
+<li>inmigrate: <ul>
+<li>调用<code>virtio_bus_device_plugged</code>，通过对应设备类型的get_features，初始化<code>VirtIODevice::host_features</code>；</li>
+<li><code>virtio_load</code>-&gt;……-&gt;<code>virtio_net_set_features</code>-&gt;……-&gt;<code>vhost_ack_features</code>，在<code>virtio_load</code>中接收源端协商完成的<code>VirtIODevice::guest_features</code>，在<code>vhost_ack_features</code>中将接收到的<code>VirtIODevice::guest_features</code>和后端对应feature_bits共同支持的bit置位，将结果保存在<code>vhost_dev::acked_features</code>；</li>
+</ul>
+</li>
+<li>running: <code>qemu_main_loop</code>-&gt;<code>main_loop_wait</code>-&gt;……-&gt;<code>vm_start</code>-&gt;……-&gt;<code>virtio_set_features</code>，使用inmigrate过程中设置好的<code>vhost_net::acked_features</code>通过后端对应的接口传递到后端。</li>
+</ol>
+<h2 id="正常启动流程和热迁移流程对比"><a href="#正常启动流程和热迁移流程对比" class="headerlink" title="正常启动流程和热迁移流程对比"></a>正常启动流程和热迁移流程对比</h2><p>硬件设备的初始化流程都一致，除了PCI设备的一些状态也是通过迁移初始化之外，最主要的区别在于热迁移流程中的features协商过程：协商必须的<code>VirtIODevice::guest_features</code>通过热迁移从源端获取，后端直接和QEMU进行协商流程；协商流程控制不再需要前端驱动修改设备status，而是在QEMU热迁移流程中触发。前端驱动不参与、不感知，避免了重新初始化。</p>
+]]></content>
+      <categories>
+        <category>Technology</category>
+      </categories>
+      <tags>
+        <tag>Virtualization</tag>
+        <tag>Virtio/Vhost</tag>
       </tags>
   </entry>
 </search>
