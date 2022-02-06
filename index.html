@@ -143,6 +143,80 @@
     
     
     <article
+  id="post-Some-attempts-to-connect-to-VDI"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h2 itemprop="name">
+  <a class="article-title" href="/2022/02/06/Some-attempts-to-connect-to-VDI/"
+    >Some attempts to connect to VDI</a> 
+</h2>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2022/02/06/Some-attempts-to-connect-to-VDI/" class="article-date">
+  <time datetime="2022-02-06T10:27:36.000Z" itemprop="datePublished">2022-02-06</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+   
+    </div>
+      
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Why-do-I-need-to-do-this"><a href="#Why-do-I-need-to-do-this" class="headerlink" title="Why do I need to do this"></a>Why do I need to do this</h1><p>公司提供VDI作为办公环境，远程办公时，需要通过VPN先连接到公司内网，再从内网连接到办公VDI。<br>公司提供了Mac和Windows的VPN客户端用于连接到内网，按理说安装并使用公司提供的客户端连接内网即可，但是之所以没有这么做有两个主要原因：    </p>
+<ul>
+<li>公司提供的VPN配套的软件太过臃肿；</li>
+<li>公司提供的VDI内置了访问控制软件，会记录IM的聊天记录等信息。担心VPN“附赠”的软件或者VPN本身会做类似的操作🙄。</li>
+</ul>
+<p>这篇博文主要记录下折腾虚拟桌面环境的一些经历。</p>
+<h1 id="What-attempts-did-I-try"><a href="#What-attempts-did-I-try" class="headerlink" title="What attempts did I try"></a>What attempts did I try</h1><p>由于上面说的原因，需要在个人PC环境之外，提供一个桌面环境用于远程连接到VDI。<br>再去配置一套物理桌面环境显然是不现实的，所以主要向虚拟桌面环境考虑：</p>
+<ul>
+<li>Windows Sandbox</li>
+<li>Cloud Virtual Mechine</li>
+<li>Reverse Proxy (frp)</li>
+<li>MacOS Container</li>
+</ul>
+<h2 id="Windows-Sandbox"><a href="#Windows-Sandbox" class="headerlink" title="Windows Sandbox"></a>Windows Sandbox</h2><p><a target="_blank" rel="noopener" href="https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-sandbox/windows-sandbox-overview">Windows Sandbox</a>是一个非常好的选择，它是Windows内置的虚拟化技术，在Windows 10的专业/企业版中打开选项后可以直接启动。<br>该技术和通用的虚拟化技术一样，对CPU的虚拟化特性也有一定要求，不过不是太老的CPU应该都能够满足要求。在我个人的移动端4代i7、8G内存的PC上，Windows 10和Windows 11中，Windows Sandbox都有足够好的表现。因为它只是虚拟了一套运行环境（runtime environment），应该是WIndows自己的容器化技术。相比于直接运行一个虚拟机而言，轻量的多，同时它还支持GPU虚拟化，从实际使用体验上来看，Sandbox的启停都足够快，同时图形性能对于基本办公足够使用了。<br>但它有个明显的弊端：所有在Sandbox中所做修改都不会被保存，将会随Sandbox进程的退出一并被销毁（类似于加了<code>--rm</code>参数的docker容器🤨）。这个特性提供了绝对的Sandbox环境，但和我个人的使用场景上并不是完全契合，每次需要连接VDI时都要全新安装一整套的VPN软件，不过总体来说从使用难度和使用体验上来说，还是相对不错的。<br>没有最终使用这个方案的原因主要是因为我的Windows PC坏了😅。</p>
+<h2 id="Cloud-Virtual-Mechine"><a href="#Cloud-Virtual-Mechine" class="headerlink" title="Cloud Virtual Mechine"></a>Cloud Virtual Mechine</h2><p>Windows PC坏了以后，开始转战MacOS。虚拟机是一个常见的能够提供虚拟桌面环境的方式，由于MacOS的软件生态（主要是💰的问题），没有选择直接在MacOS上运行虚拟机，转而考虑公有云提供的虚拟机服务，正好看到腾讯云有轻量应用服务器的优惠，且支持Windows系统，遂马上下单。<br>但当真正使用这个虚拟机时发现，公司提供的VPN客户端不支持在Windows Server安装（垃圾🙃），同时这个轻量应用服务器不支持自行上传镜像安装系统，所以没法直接重装成个人版的Windows。<br>但，买都买了，还是折腾下吧。</p>
+<h3 id="Nested-Virtualization"><a href="#Nested-Virtualization" class="headerlink" title="Nested Virtualization"></a>Nested Virtualization</h3><p>第一个尝试是虚拟机，没错，是在1核2G的虚拟机上再跑一个Windows虚拟机。<br>基于如此拉胯的硬件配置，Host必不可能选Windows了，所以重装成了CentOS。然后就是supervisor的选择，工作中用的比较多的是QEMU-KVM，相对比较熟悉了，所以尝试换用Virutal Box。<br>虽然<a target="_blank" rel="noopener" href="https://www.virtualbox.org/">Virutal Box</a>是Oracle主导的开源项目，但官网就给人一种贫穷的感觉。它主要运行在桌面环境上，虽然提供了命令行工具VBoxManage，但在命令行环境下仍然需要安装一些如QT相关的依赖库。不幸的是在解决了依赖问题，配置好虚拟机后，仍然无法启动，报错是无法启用硬件加速特性（腾讯云的这个虚拟机不支持嵌套虚拟化），在配置里取消了所有硬件加速的选项后，还是无法解决该问题（MacOS上的Virtual Box也是一堆BUG），无奈只能放弃Virtual Box。<br>于是换用QEMU，直接使用yum安装，使用libvirt进行虚拟机配置，由于不支持嵌套虚拟化，同样没法使用QEMU-KVM，只能通过纯模拟的CPU运行GuestOS，虽然能够运行，但是几乎完全无法正常使用，开机需要15min，开机之后所有的操作都是分钟级别的，就是折腾来玩玩罢了。</p>
+<h3 id="Dual-Operation-System"><a href="#Dual-Operation-System" class="headerlink" title="Dual Operation System"></a>Dual Operation System</h3><p>这个配置下的嵌套虚拟化也就图一乐，既然官方给的镜像不包含个人版的Windows，同时也不支持自定义上传镜像，那就采用安装双系统的曲线救国的方式。<br>先使用原有分区的空闲空间创建一个新的分区，再将操作系统镜像下载到硬盘上，直接从硬盘运行安装程序，将操作系统安装到新的分区上。<br>为了在1核2G的拉胯配置上尽可能流畅地运行Windows，使用<a target="_blank" rel="noopener" href="https://archive.org/details/Tiny7">Tiny7</a>（精简版的Windows 7）作为使用的操作系统，但镜像内不包含Virtio驱动，无法继续安装。下载了几乎所有版本的Virtio驱动在安装时使用，但全都无法奏效，最后无奈换用了<a target="_blank" rel="noopener" href="https://archive.org/details/tiny-10_202105">Tiny10</a>（精简版的Windows 10）。使用Tiny10后，在安装时选择硬盘上已有的Virtio驱动，即可完成正常安装。<br>流畅度上来说和自带的Windows Server相比没有明显差距，在远程连接上VDI后，由于自身配置拉胯，流畅度一般。且由于没有显卡，在需要图形渲染的场景下（如窗口切换），卡顿明显。总的来说属于勉强可用的程度，但好处是无需在自己的PC上运行虚拟机。  </p>
+<h3 id="Windows-Container"><a href="#Windows-Container" class="headerlink" title="Windows Container"></a>Windows Container</h3><p><a target="_blank" rel="noopener" href="https://docs.microsoft.com/en-us/virtualization/windowscontainers/">Windows Container</a>是考虑过的另一个折腾方向，Windows官方提供了<a target="_blank" rel="noopener" href="https://docs.microsoft.com/en-us/virtualization/windowscontainers/manage-containers/container-base-images">镜像</a>，但在Windows Server安装Docker时，始终有问题无法解决，同时Windows容器只能使用和Host相同的kernel，并且无法提供一个基于容器的桌面环境，遂放弃。</p>
+<h2 id="Reverse-Proxy-frp"><a href="#Reverse-Proxy-frp" class="headerlink" title="Reverse Proxy (frp)"></a>Reverse Proxy (frp)</h2><p>使用反向代理（如<a target="_blank" rel="noopener" href="https://github.com/fatedier/frp">frp</a>）将Windows远程控制服务暴露到公网也是一个可行方案，但细节上没有那么简单。<br>由于办公VDI是和公网隔离的，所以无法直接使用反向代理直接连接到办公VDI。但公司提供了外网VDI用于在办公时访问公网，可以使用反向代理连接到外网VDI，再在外网VDI中安装运行VPN客户端后反向连接到办公VDI内。<br>这种方案下的外网VDI代替了自购的公有云虚拟机，拥有更高的配置，但同样不支持虚拟显卡，图形性能仍然拉胯。按理说可以替代自购的公有云虚拟机了，但由于安全部门审计到frp流量，告知不允许使用此类反向代理，遂放弃。  </p>
+<h2 id="MacOS-Container"><a href="#MacOS-Container" class="headerlink" title="MacOS Container"></a>MacOS Container</h2><p>在考虑虚拟化方案时，觉得虚拟机消耗过大后，很容易想到的就是容器技术。如果使用容器技术能够满足需求，那就能够使用一个轻量化的隔离环境。在我只有MacOS的前提下，开始查找是否有MacOS的容器化方案。<br>幸运的是，还真有个项目<a target="_blank" rel="noopener" href="https://github.com/sickcodes/Docker-OSX">Docker-OSX</a>，不幸的是，这个项目基于QEMU-KVM，说白了还是虚拟机那一套，所以也就是看了看而已。</p>
+<h1 id="What-did-I-chose-finally"><a href="#What-did-I-chose-finally" class="headerlink" title="What did I chose finally"></a>What did I chose finally</h1><p>由于上述种种原因，最终的使用方案是在公有云自购的虚拟机上安装的双系统中，连接到远程VDI。<br>如果有Windows环境的话，还是推荐使用WIndows Sandbox；MacOS环境下，如果能够容忍虚拟机的性能消耗的话，虚拟机应该是一个比较好的选择。<br>相比之下，在公有云上的拉胯虚拟机中连接到远程VDI的方案并不是什么理想方案了。</p>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <footer class="article-footer">
+       
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Virtualization/" rel="tag">Virtualization</a></li></ul>
+
+    </footer>
+  </div>
+
+    
+ 
+    
+</article>
+
+    
+    <article
   id="post-Hello-World"
   class="article article-type-post"
   itemscope
@@ -241,7 +315,7 @@
   <blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#114;&#115;&#x31;&#x34;&#56;&#53;&#48;&#64;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;">&#x6d;&#x61;&#114;&#115;&#x31;&#x34;&#56;&#53;&#48;&#64;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#56;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#x2e;&#x63;&#x6f;&#x6d;">&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#56;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#x2e;&#x63;&#x6f;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%"> 
       <!-- reward -->
       
