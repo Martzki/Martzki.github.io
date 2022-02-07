@@ -6,7 +6,7 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#x38;&#x35;&#48;&#x40;&#x67;&#x6d;&#97;&#105;&#x6c;&#x2e;&#99;&#111;&#109;">&#x6d;&#x61;&#x72;&#x73;&#x31;&#x34;&#x38;&#x35;&#48;&#x40;&#x67;&#x6d;&#97;&#105;&#x6c;&#x2e;&#99;&#111;&#109;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#x61;&#114;&#x73;&#x31;&#52;&#x38;&#x35;&#x30;&#x40;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#x6f;&#109;">&#109;&#x61;&#114;&#x73;&#x31;&#52;&#x38;&#x35;&#x30;&#x40;&#x67;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#x6f;&#109;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
       <categories>
         <category>Other</category>
@@ -19,7 +19,7 @@
     <title>Hello World</title>
     <url>/2022/01/31/Hello-World/</url>
     <content><![CDATA[<h1 id="About-Hello-World"><a href="#About-Hello-World" class="headerlink" title="About Hello World"></a>About Hello World</h1><ul>
-<li>Hello World往往作为很多项目的初始示例程序，我个人把Hello World视为程序员对待“最初”的哲学，所以把它作为这个博客的第一篇博文的标题，用于给这个博客开个头（终于赶在过年前写出来了）。<span id="more"></span></li>
+<li>Hello World往往作为很多项目的初始示例程序，我个人把Hello World视为程序员对待“最初”的哲学，所以把它作为这个博客的第一篇博文的标题，用于给这个博客开个头（终于赶在过年前写出来了）。</li>
 </ul>
 <h1 id="About-Lost-Stars"><a href="#About-Lost-Stars" class="headerlink" title="About Lost Stars"></a>About Lost Stars</h1><ul>
 <li>Lost Stars是我个人最喜欢的Maroon 5的一首歌，歌词中表现了和“寄蜉蝣于天地，渺沧海之一粟”有着异曲同工之妙的对个体的渺小之感叹，和我个人目前的人生状态较为契合，所以把它作为这个博客的标题；</li>
@@ -46,8 +46,6 @@
 <li>公司提供的VDI内置了访问控制软件，会记录IM的聊天记录等信息。担心VPN“附赠”的软件或者VPN本身会做类似的操作🙄。</li>
 </ul>
 <p>这篇博文主要记录下折腾虚拟桌面环境的一些经历。</p>
-<span id="more"></span>
-
 <h1 id="What-attempts-did-I-try"><a href="#What-attempts-did-I-try" class="headerlink" title="What attempts did I try"></a>What attempts did I try</h1><p>由于上面说的原因，需要在个人PC环境之外，提供一个桌面环境用于远程连接到VDI。<br>再去配置一套物理桌面环境显然是不现实的，所以主要向虚拟桌面环境考虑：</p>
 <ul>
 <li>Windows Sandbox</li>
@@ -77,7 +75,6 @@
     <content><![CDATA[<h1 id="QEMU中的Virtio-features协商流程"><a href="#QEMU中的Virtio-features协商流程" class="headerlink" title="QEMU中的Virtio features协商流程"></a>QEMU中的Virtio features协商流程</h1><p>下面以virtio-net对接vhost-net（kernel）为例，分析整个Virtio features协商的过程。</p>
 <h2 id="vhost-net"><a href="#vhost-net" class="headerlink" title="vhost-net"></a>vhost-net</h2><p>vhost_net作为描述后端的数据结构，与真正使用的后端（vhost_user or vhost_net）对应。<br>每个vhost_net包含一个vhost_dev，vhost_net的features实际就是vhost_dev的features，与features相关的成员有：<code>features</code>，<code>acked_features</code>，<code>backend_features</code>和<code>protocol_features</code>：</p>
 <figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_net</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> <span class="title">dev</span>;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_virtqueue</span> <span class="title">vqs</span>[2];</span></span><br><span class="line">    <span class="keyword">int</span> backend;</span><br><span class="line">    NetClientState *nc;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> &#123;</span></span><br><span class="line">……</span><br><span class="line">    <span class="keyword">uint64_t</span> features;</span><br><span class="line">    <span class="keyword">uint64_t</span> acked_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> backend_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> protocol_features;</span><br><span class="line">……</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
-<span id="more"></span>
 <h3 id="vhost-dev-features"><a href="#vhost-dev-features" class="headerlink" title="vhost_dev::features"></a>vhost_dev::features</h3><p>在<code>vhost_dev_init</code>中，通过后端对应的接口（ioctl or unix socket），从后端获取到的后端支持的features。</p>
 <h3 id="vhost-dev-acked-features"><a href="#vhost-dev-acked-features" class="headerlink" title="vhost_dev::acked_features"></a>vhost_dev::acked_features</h3><p>前端依据从后端获取的host features进行协商，协商完成后真正向后端传递的features（过滤了后端不支持的features），即后端真正工作的features。</p>
 <h3 id="vhost-dev-backend-features"><a href="#vhost-dev-backend-features" class="headerlink" title="vhost_dev::backend_features"></a>vhost_dev::backend_features</h3><p>从命名看是描述后端的features，但和features字段重复。vhost-net相关的实际代码调用如下：</p>
