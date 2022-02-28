@@ -23,6 +23,149 @@
       </tags>
   </entry>
   <entry>
+    <title>Mattermost Auto Reply Tool</title>
+    <url>/2022/02/17/Mattermost-auto-reply-tool/</url>
+    <content><![CDATA[<h1 id="Preface"><a href="#Preface" class="headerlink" title="Preface"></a>Preface</h1><p><a href="https://mattermost.org/">Mattermost</a>是一款开源的IM工具，作为Slack的替代产品。</p>
+<h2 id="Mattermost-Source-Code"><a href="#Mattermost-Source-Code" class="headerlink" title="Mattermost Source Code"></a>Mattermost Source Code</h2><p>mattermost的github主页上主要有这几个项目：</p>
+<ul>
+<li>mattermost-server: 用Go开发的服务端代码，也是整体的核心代码；</li>
+<li>mattermost-webapp: 基于Web的客户端代码，所有其他类型的客户端，均是基于webapp实现；</li>
+<li>desktop: 基于Electron的Windows客户端代码，通过Chromium浏览器内核连接webapp，完成客户端的功能；</li>
+<li>mattermost-mobile: iOS和Android的客户端代码，应该也是通过浏览器内核连接webapp进而实现的的客户端功能。</li>
+</ul>
+<h2 id="Mattermost-Deployment"><a href="#Mattermost-Deployment" class="headerlink" title="Mattermost Deployment"></a>Mattermost Deployment</h2><p><a href="https://docs.mattermost.com/guides/deployment.html#server-installation">官方文档</a>中提供了各种环境下的部署方式，最便捷的就是直接在本地运行docker容器。不得不说，容器技术极大地简化了应用的部署流程，如果只是需要部署一个基本的服务端，直接按照文档指导，启动容器即可，容器内会自行运行server和webapp，即可通过浏览器连接webapp。</p>
+<h1 id="Mattermost-Auto-Reply"><a href="#Mattermost-Auto-Reply" class="headerlink" title="Mattermost Auto Reply"></a>Mattermost Auto Reply</h1><p>关于Mattermost自身的其他功能就不介绍了，有他自己的优缺点。聊天功能中，Mattermost自身提供了一个自动回复的功能，在开启自动回复时，将会把在线状态设置为离开。此时收到所有私聊信息后，会触发自动回复。</p>
+<p>这个自带功能的鸡肋的地方在于：会强制将状态设置为离线，此时收到新的消息不再有推送提醒，并且无法设置自动回复间隔，每收到的一条新消息都会触发自动回复。<br>而一个理想的自动回复功能应该包含：</p>
+<ul>
+<li>可自由开关</li>
+<li>和自身账户在线状态无关，不会设置在线状态为离开</li>
+<li>功能开启后不影响正常使用，收到新消息后能够正常触发消息推送</li>
+<li>可设置消息回复的频率</li>
+</ul>
+<h2 id="Develop-with-Server"><a href="#Develop-with-Server" class="headerlink" title="Develop with Server"></a>Develop with Server</h2><p>对一款开源产品而言，直接修改源代码是实现功能自定义的最直接的方式。</p>
+<p>最初的想法就是直接修改原生的自动回复代码，将其中设置在线状态的代码屏蔽，即可在不做大量修改的情况下，将自动回复功能会将状态设置为离线的问题解决。</p>
+<p>在看了对应功能的源码后，发现这部分功能是在server中实现的：  </p>
+<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="comment">// 自动回复功能启停（同时设置用户在线状态）</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(a *App)</span> <span class="title">SetAutoResponderStatus</span><span class="params">(user *model.User, oldNotifyProps model.StringMap)</span></span> &#123;</span><br><span class="line">	active := user.NotifyProps[model.AutoResponderActiveNotifyProp] == <span class="string">&quot;true&quot;</span></span><br><span class="line">	oldActive := oldNotifyProps[model.AutoResponderActiveNotifyProp] == <span class="string">&quot;true&quot;</span></span><br><span class="line"></span><br><span class="line">	autoResponderEnabled := !oldActive &amp;&amp; active</span><br><span class="line">	autoResponderDisabled := oldActive &amp;&amp; !active</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> autoResponderEnabled &#123;</span><br><span class="line">		a.SetStatusOutOfOffice(user.Id)</span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> autoResponderDisabled &#123;</span><br><span class="line">		a.SetStatusOnline(user.Id, <span class="literal">true</span>)</span><br><span class="line">	&#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 自动回复功能代码</span></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(a *App)</span> <span class="title">SendAutoResponse</span><span class="params">(c *request.Context, channel *model.Channel, receiver *model.User, post *model.Post)</span> <span class="params">(<span class="keyword">bool</span>, *model.AppError)</span></span> &#123;</span><br><span class="line">	<span class="keyword">if</span> receiver == <span class="literal">nil</span> || receiver.NotifyProps == <span class="literal">nil</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>, <span class="literal">nil</span></span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	active := receiver.NotifyProps[model.AutoResponderActiveNotifyProp] == <span class="string">&quot;true&quot;</span></span><br><span class="line">	message := receiver.NotifyProps[model.AutoResponderMessageNotifyProp]</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> !active || message == <span class="string">&quot;&quot;</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>, <span class="literal">nil</span></span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	rootID := post.Id</span><br><span class="line">	<span class="keyword">if</span> post.RootId != <span class="string">&quot;&quot;</span> &#123;</span><br><span class="line">		rootID = post.RootId</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	autoResponderPost := &amp;model.Post&#123;</span><br><span class="line">		ChannelId: channel.Id,</span><br><span class="line">		Message:   message,</span><br><span class="line">		RootId:    rootID,</span><br><span class="line">		Type:      model.PostTypeAutoResponder,</span><br><span class="line">		UserId:    receiver.Id,</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> _, err := a.CreatePost(c, autoResponderPost, channel, <span class="literal">false</span>, <span class="literal">false</span>); err != <span class="literal">nil</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>, err</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>, <span class="literal">nil</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，这个功能是通过对服务端用户状态进行相应的设置，启用功能后，服务端在消息处理时自动实现的，整个过程客户端只起到了一个状态设置的作用，不参与实际的回复功能实现。</p>
+<p>经过上面的代码分析，如果想要通过修改原生代码实现对应功能的话，则需要修改服务端代码，重新编译部署再上线。其劣势主要有：</p>
+<ul>
+<li>对服务端代码进行修改需要对应的权限：如果没有服务端的管理权限，单独作为用户，是没有办法修改服务端代码的；</li>
+<li>重新部署会引起业务中断：更换服务端代码重新部署会引起业务中断。</li>
+</ul>
+<p>由于大多数使用者都是单纯的用户，并不具备重新部署服务端的条件，所以这个方案作为理论可行且简单的方案，但并未最终选用。</p>
+<h2 id="Develop-with-Client"><a href="#Develop-with-Client" class="headerlink" title="Develop with Client"></a>Develop with Client</h2><p>上面分析了对应代码是在服务端中实现的，在功能调研期间，发现修改服务端实现功能的方式不太现实后，曾考虑过修改客户端代码，在客户端重新实现一个自动回复功能。</p>
+<p>但经过更细致的分析后发现，mattermost的客户端核心是mattermost-webapp，客户端的具体的消息收发功能都是在mattermost-webapp中实现的，各个平台上的客户端都只是利用平台特性对mattermost-webapp进行了封装，主要应该是为了平台相关的交互功能实现，比如文件上传下载、以及消息推送功能的实现。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/process-diagram.png" width="70%" height="70%">
+
+<center><p>mattermost-desktop Process Diagram</p></center>
+
+<p>如<a href="https://developers.mattermost.com/contribute/desktop/">官方文档</a>描述的那样，mattermost-desktop基于Electron开发，分为main进程和renderer进程，main进程由NodeJS实现，包含了通知管理、窗口布局管理、配置、操作系统集成等功能，同时包含了对rederer进程的生命周期管理等功能；rederer进程基本就是Chromium浏览器内核，通过连接webapp实现对应的功能。</p>
+<p>main进程和rederer进程之间通过特定的IPC进行交互。</p>
+<p>所以尝试修改客户端代码实现功能的方案也告吹，因为客户端的核心mattermost-webapp通常是和mattermost-server运行在一起的，对其进行修改的难度同样较大。</p>
+<h2 id="Develop-an-API-Request-Proxy"><a href="#Develop-an-API-Request-Proxy" class="headerlink" title="Develop an API Request Proxy"></a>Develop an API Request Proxy</h2><p>由于消息的收发都是webapp调用和server的API实现的，所以一种理论可行的方案为：获取客户端的cookie等身份认证信息，监控所有客户端的交互请求。通过对交互请求进行分析，收到消息后，依据自动回复配置和策略，调用对应的API，发送预先设定好的自动回复消息。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/API proxy.drawio.png" width="70%" height="70%">
+
+<center><p>API Request Proxy</p></center>
+
+<p>这是一种理论可行的方案，但却不是一个现实的、容易实现的方案，有如下几个原因：</p>
+<ul>
+<li>认证：不论是server API的认证信息的获取，还是HTTPS（假设服务端使用了HTTPS）的认证信息获取，都需要通过已经完成认证的webapp来获取，实际上是很不容易实现的，而这些认证信息，是分析webapp和server的API请求、通过API完成消息发送的前提；</li>
+<li>使用难度：需要以请求代理的方式部署，从而能够在webapp和server交互的过程中获取到交互的具体请求。代理的部署形态增加了用户的使用难度。</li>
+</ul>
+<p>综上，这是一种理论可行的、从实现方式上看较为原生的（raw）方案，但并不现实。</p>
+<h2 id="Develop-with-API-Driver-Finally-Choosed"><a href="#Develop-with-API-Driver-Finally-Choosed" class="headerlink" title="Develop with API Driver (Finally Choosed)"></a>Develop with API Driver (Finally Choosed)</h2><p>关于mattermost的API，除了webapp可以直接访问外，如<a href="https://api.mattermost.com/#tag/introduction">官方文档</a>所描述的，有多种语言的Driver可供开发者使用。使用特定的Driver可以连接server，认证完成后可通过定义好的API调用来实现对应的功能，即可通过API完成第三方应用的开发。</p>
+<p>最终选择了Python的<a href="https://github.com/Vaelor/python-mattermost-driver">Driver</a>，感谢作者<a href="https://github.com/Vaelor">@Vaelor</a>。</p>
+<p>项目地址：<a href="https://github.com/Martzki/Mattermost-Tools">Mattermost-Tools</a>。</p>
+<h3 id="Design-Overview"><a href="#Design-Overview" class="headerlink" title="Design Overview"></a>Design Overview</h3><p>为了完成自动回复的功能，有几个子功能需要实现：</p>
+<ul>
+<li>Connect to Server：API调用、消息获取等功能都需要在连接到server并完成认证的前提下才能实现；</li>
+<li>Events Handle：获取server推送的event，处理处理消息类型的event，在满足自动回复的条件后，调用自动回复的功能；</li>
+<li>Auto Reply：依据用户配置，对消息进行自动回复，也是核心功能；</li>
+<li>Config Update：自动回复相关的用户配置的更新；</li>
+<li>GUI：用户友好的配置交互功能，可在运行过程中动态变更用户配置。</li>
+</ul>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/overview.drawio.png" width="70%" height="70%">
+
+<center><p>Overview</p></center>
+
+<h3 id="Connect-to-Server"><a href="#Connect-to-Server" class="headerlink" title="Connect to Server"></a>Connect to Server</h3><p>首先就是连接到Server，API提供了WebSocket对应的接口，可以通过用户名密码/Token的方式连接server，认证成功后即可通过WebSocket获取服务端推送的消息，以及调用对应的服务端API。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/connect to server.drawio.png" width="70%" height="70%">
+
+<center><p>Connect to Server</p></center>
+
+<h3 id="Event-Handle"><a href="#Event-Handle" class="headerlink" title="Event Handle"></a>Event Handle</h3><p>WebSocket连接后，接收server推送的event，再依据具体业务逻辑选择不同的event处理方式。</p>
+<p>这套event机制实际上提供了一个方便的功能开发的框架，对应的功能注册对特定event的handler，当event触发后，调用注册的所有handler即可实现不同的功能。不过目前只有一个自动回复的功能，或者说自动回复只是一个特定的post类型的event handler。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handle process.drawio.png" width="70%" height="70%">
+
+<center><p>Event Handle</p></center>
+
+<h3 id="Auto-Reply"><a href="#Auto-Reply" class="headerlink" title="Auto Reply"></a>Auto Reply</h3><p>对自动回复而言，只需关注post类型的event即可，完整的event类型参考<a href="https://api.mattermost.com/#tag/WebSocket">API文档</a>。通过对post类型的event注册handler，在event触发后调用对应的实现逻辑完成自动回复功能。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handler.drawio.png" width="70%" height="70%">
+
+<center><p>Post Event Handle</p></center>
+
+<p>目前对自动回复功能的设计，有如下功能：</p>
+<ul>
+<li>仅限私聊：通过判断post所在channel中的人数来确定当前post是否是一条私聊消息；</li>
+<li>自动回复间隔：减少自动回复的频率，记录每一个会话的自动回复历史，在自动回复间隔期间的多次消息接收不会触发多次自动回复；</li>
+<li>自动回复间隔调整：在接收到特定消息后，调整下一次自动回复的间隔为一个预设值，用于延长自动回复间隔。</li>
+</ul>
+<p>于是，在收到私聊消息，且当前时间与上一次自动回复的间隔时间大于用户配置的自动回复间隔后，触发自动回复的条件，通过API将用户预设好的自动回复消息发送到对应的channel。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/auto reply handler.drawio.png" width="70%" height="70%">
+
+<center><p>Auto Reply Handler</p></center>
+
+<p><strong>ps.</strong> mattermost中，如果用户在接收到未读post的channel中发送了新的post，将会把之前的未读状态清除，体现在webapp上就是未读提示被清除了。所以自动回复的post发送后，需要将原来的未读post状态重新设置为未读，避免丢失了用户的未读消息提醒。</p>
+<h3 id="Config-Update"><a href="#Config-Update" class="headerlink" title="Config Update"></a>Config Update</h3><p>在自动回复功能中，提供了一些可供用户配置的选项。在实际使用的过程中，用户可能会需要动态的调整配置，最常见的就是调整自动回复的内容。为了避免每一次的配置调整都需要重启程序，设计了配置的更新的功能：</p>
+<ol>
+<li>建立一个缓存用于接收新的用户配置；</li>
+<li>每一次自动回复即将触发时检查缓存，是否有新的用户配置下发，如果有，则先更新配置再进行后续的自动回复；</li>
+<li>更新配置时只更新合法存在的字段，跳过对非法字段的更新。</li>
+</ol>
+<p>使用缓存的目的是为了避免锁的使用，配置涉及多个字段，无法做到原子更新。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/config update.drawio.png" width="70%" height="70%">
+
+<center><p>Config Update</p></center>
+
+<h3 id="GUI"><a href="#GUI" class="headerlink" title="GUI"></a>GUI</h3><blockquote>
+<p>命令行又不是不能用！</p>
+</blockquote>
+<p>用户肯定都希望应用是简单易用的，并不是所有人都会使用，或者能接受仅支持命令行的工具的，为此需要为用户提供一个GUI用于交互。</p>
+<p>对桌面用户而言，提供GUI，最开始想到的是开发一个桌面应用程序。虽然Python确实有对应的开发包，如<a href="">PyQt</a>、<a href="">Tkinter</a>等，但直接开发桌面应用程序总是有一些各种各样的弊端：</p>
+<ul>
+<li>开发工具的使用：使用这些对应的开发包有着对应的学习成本，根据我的Qt使用经验而言，Qt的安装十分臃肿，PyQt应该也好不到哪去；</li>
+<li>丑：没什么好说的；</li>
+<li>前后端耦合：这个其实是我个人的原因，开发GUI时，使用对应语言的GUI工具，总是将前后端代码耦合在一块，不利于扩展。</li>
+</ul>
+<p>所以，虽然后端是Python，前端未必需要直接使用Python开发。换句话说，你的桌面应用程序，又何必一定是一个桌面应用程序呢？mattermost本身就是一个很好的例子，桌面客户端仅仅是web浏览器内核的一个封装，这种前后端分离的好处是后端可以提供相同的接口，前端可以依靠自身特点去实现，避免了耦合。</p>
+<p>所以最终的实现上，使用Python实现了一个web服务器，再使用HTML编写了一个页面用于交互，套用了一些CSS模板后，交互效果还不错。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/web console.png" width="70%" height="70%">
+
+<center><p>Web Console</p></center>
+
+<p>除了用户登陆、配置更新等交互，还有一点是，用户如何运行web服务器，如果还是直接通过命令行执行Python的方式，多少还是有点捞。为此，使用<a href="https://github.com/pyinstaller/pyinstaller">PyInstaller</a>将脚本、资源文件和解释器封装成一个可执行文件，并为其设置了一个图标，这样一来用户可以通过直接运行可执行文件的方式去运行工具（不过PyInstaller打包时会依赖一些平台特定的动态库，这部分不是很通用，不同的操作系统上可能需要重新打包）。</p>
+<p>同时还使用了<a href="https://github.com/moses-palmer/pystray">PyStray</a>为工具创建了一个托盘图标，用户可以通过点击图标的方式打开web页面进行交互，同时可以通过图标来退出程序。</p>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/tray.png" width="70%" height="70%">
+
+<center><p>Tray Icon</p></center>
+
+<h3 id="Todo"><a href="#Todo" class="headerlink" title="Todo"></a>Todo</h3><ul>
+<li>群聊的自动回复：在群聊收到的post中，依据特定的触发词，如@，触发自动回复；</li>
+<li>内存清理：目前为每一个触发过自动回复的channel创建一条记录，每触发一次自动回复将会更新其中的最后一次自动回复的时间。理论上最糟糕的场景是，一直有新的私聊触发自动回复，且触发自动回复后，不再有任何消息。这会导致记录一直增长得不到释放，所以需要有机制去清理理论上可能无限增长的内存记录；</li>
+<li>优化自动回复条件：目前使用自动回复间隔来判断是否符合自动回复的条件，但其实可以使用当前channel的历史最后一条post的时间来判断，这样可以减少一定的内存使用，同时将用户自己发出的消息，也加入判断条件中，避免了用户主动发送消息，同时收到回复后，在自动回复间隔满足条件的情况下自动回复的场景（这种主动发起会话，在回复间隔符合条件时也不应该自动回复）；</li>
+<li>进程退出的资源回收：目前功能单一，不进行资源回收也没有太大问题，不过合理的代码应该要做好资源回收再退出程序，避免后续因为功能扩展，退出时需要回收资源的时候重新处理；</li>
+<li>UI代码优化：精简一些无用的CSS引用。</li>
+</ul>
+]]></content>
+      <categories>
+        <category>Technology</category>
+      </categories>
+      <tags>
+        <tag>For Fun</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>Travel in Hangzhou in 2021</title>
     <url>/2022/02/07/Travel-in-Hangzhou-in-2021/</url>
     <content><![CDATA[<p>2021年的清明节假期，是我的第一次杭州旅行。一是想体验下杭州的清明时节，欣赏下西湖美景；二是亲身感受下杭州作为一线IT城市的氛围。  </p>
@@ -191,7 +334,7 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#97;&#x72;&#x73;&#x31;&#52;&#x38;&#x35;&#48;&#x40;&#103;&#109;&#97;&#105;&#108;&#46;&#99;&#x6f;&#109;">&#109;&#97;&#x72;&#x73;&#x31;&#52;&#x38;&#x35;&#48;&#x40;&#103;&#109;&#97;&#105;&#108;&#46;&#99;&#x6f;&#109;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#97;&#x72;&#x73;&#49;&#x34;&#x38;&#x35;&#48;&#x40;&#x67;&#109;&#x61;&#105;&#x6c;&#x2e;&#x63;&#111;&#x6d;">&#x6d;&#97;&#x72;&#x73;&#49;&#x34;&#x38;&#x35;&#48;&#x40;&#x67;&#109;&#x61;&#105;&#x6c;&#x2e;&#x63;&#111;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
       <categories>
         <category>Other</category>
