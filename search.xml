@@ -58,17 +58,13 @@
 <p>由于大多数使用者都是单纯的用户，并不具备重新部署服务端的条件，所以这个方案作为理论可行且简单的方案，但并未最终选用。</p>
 <h2 id="Develop-with-Client"><a href="#Develop-with-Client" class="headerlink" title="Develop with Client"></a>Develop with Client</h2><p>上面分析了对应代码是在服务端中实现的，在功能调研期间，发现修改服务端实现功能的方式不太现实后，曾考虑过修改客户端代码，在客户端重新实现一个自动回复功能。</p>
 <p>但经过更细致的分析后发现，mattermost的客户端核心是mattermost-webapp，客户端的具体的消息收发功能都是在mattermost-webapp中实现的，各个平台上的客户端都只是利用平台特性对mattermost-webapp进行了封装，主要应该是为了平台相关的交互功能实现，比如文件上传下载、以及消息推送功能的实现。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/process-diagram.png" width="70%" height="70%">
-
-<center><p>mattermost-desktop Process Diagram</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/process-diagram.png" width="70%" height="70%" alt="mattermost-desktop Process Diagram">
 
 <p>如<a href="https://developers.mattermost.com/contribute/desktop/">官方文档</a>描述的那样，mattermost-desktop基于Electron开发，分为main进程和renderer进程，main进程由NodeJS实现，包含了通知管理、窗口布局管理、配置、操作系统集成等功能，同时包含了对rederer进程的生命周期管理等功能；rederer进程基本就是Chromium浏览器内核，通过连接webapp实现对应的功能。</p>
 <p>main进程和rederer进程之间通过特定的IPC进行交互。</p>
 <p>所以尝试修改客户端代码实现功能的方案也告吹，因为客户端的核心mattermost-webapp通常是和mattermost-server运行在一起的，对其进行修改的难度同样较大。</p>
 <h2 id="Develop-an-API-Request-Proxy"><a href="#Develop-an-API-Request-Proxy" class="headerlink" title="Develop an API Request Proxy"></a>Develop an API Request Proxy</h2><p>由于消息的收发都是webapp调用和server的API实现的，所以一种理论可行的方案为：获取客户端的cookie等身份认证信息，监控所有客户端的交互请求。通过对交互请求进行分析，收到消息后，依据自动回复配置和策略，调用对应的API，发送预先设定好的自动回复消息。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/API proxy.drawio.png" width="70%" height="70%">
-
-<center><p>API Request Proxy</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/API proxy.drawio.png" width="70%" height="70%" alt="API Request Proxy">
 
 <p>这是一种理论可行的方案，但却不是一个现实的、容易实现的方案，有如下几个原因：</p>
 <ul>
@@ -87,25 +83,17 @@
 <li>Config Update：自动回复相关的用户配置的更新；</li>
 <li>GUI：用户友好的配置交互功能，可在运行过程中动态变更用户配置。</li>
 </ul>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/overview.drawio.png" width="70%" height="70%">
-
-<center><p>Overview</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/overview.drawio.png" width="70%" height="70%" alt="Overview">
 
 <h3 id="Connect-to-Server"><a href="#Connect-to-Server" class="headerlink" title="Connect to Server"></a>Connect to Server</h3><p>首先就是连接到Server，API提供了WebSocket对应的接口，可以通过用户名密码/Token的方式连接server，认证成功后即可通过WebSocket获取服务端推送的消息，以及调用对应的服务端API。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/connect to server.drawio.png" width="70%" height="70%">
-
-<center><p>Connect to Server</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/connect to server.drawio.png" width="70%" height="70%" alt="Connect to Server">
 
 <h3 id="Event-Handle"><a href="#Event-Handle" class="headerlink" title="Event Handle"></a>Event Handle</h3><p>WebSocket连接后，接收server推送的event，再依据具体业务逻辑选择不同的event处理方式。</p>
 <p>这套event机制实际上提供了一个方便的功能开发的框架，对应的功能注册对特定event的handler，当event触发后，调用注册的所有handler即可实现不同的功能。不过目前只有一个自动回复的功能，或者说自动回复只是一个特定的post类型的event handler。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handle process.drawio.png" width="70%" height="70%">
-
-<center><p>Event Handle</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handle process.drawio.png" width="70%" height="70%" alt="Event Handle">
 
 <h3 id="Auto-Reply"><a href="#Auto-Reply" class="headerlink" title="Auto Reply"></a>Auto Reply</h3><p>对自动回复而言，只需关注post类型的event即可，完整的event类型参考<a href="https://api.mattermost.com/#tag/WebSocket">API文档</a>。通过对post类型的event注册handler，在event触发后调用对应的实现逻辑完成自动回复功能。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handler.drawio.png" width="70%" height="70%">
-
-<center><p>Post Event Handle</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/event handler.drawio.png" width="70%" height="70%" alt="Post Event Handle">
 
 <p>目前对自动回复功能的设计，有如下功能：</p>
 <ul>
@@ -114,9 +102,7 @@
 <li>自动回复间隔调整：在接收到特定消息后，调整下一次自动回复的间隔为一个预设值，用于延长自动回复间隔。</li>
 </ul>
 <p>于是，在收到私聊消息，且当前时间与上一次自动回复的间隔时间大于用户配置的自动回复间隔后，触发自动回复的条件，通过API将用户预设好的自动回复消息发送到对应的channel。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/auto reply handler.drawio.png" width="70%" height="70%">
-
-<center><p>Auto Reply Handler</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/auto reply handler.drawio.png" width="70%" height="70%" alt="Auto Reply Handler">
 
 <p><strong>ps.</strong> mattermost中，如果用户在接收到未读post的channel中发送了新的post，将会把之前的未读状态清除，体现在webapp上就是未读提示被清除了。所以自动回复的post发送后，需要将原来的未读post状态重新设置为未读，避免丢失了用户的未读消息提醒。</p>
 <h3 id="Config-Update"><a href="#Config-Update" class="headerlink" title="Config Update"></a>Config Update</h3><p>在自动回复功能中，提供了一些可供用户配置的选项。在实际使用的过程中，用户可能会需要动态的调整配置，最常见的就是调整自动回复的内容。为了避免每一次的配置调整都需要重启程序，设计了配置的更新的功能：</p>
@@ -126,9 +112,7 @@
 <li>更新配置时只更新合法存在的字段，跳过对非法字段的更新。</li>
 </ol>
 <p>使用缓存的目的是为了避免锁的使用，配置涉及多个字段，无法做到原子更新。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/config update.drawio.png" width="70%" height="70%">
-
-<center><p>Config Update</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/config update.drawio.png" width="70%" height="70%" alt="Config Update">
 
 <h3 id="GUI"><a href="#GUI" class="headerlink" title="GUI"></a>GUI</h3><blockquote>
 <p>命令行又不是不能用！</p>
@@ -142,15 +126,11 @@
 </ul>
 <p>所以，虽然后端是Python，前端未必需要直接使用Python开发。换句话说，你的桌面应用程序，又何必一定是一个桌面应用程序呢？mattermost本身就是一个很好的例子，桌面客户端仅仅是web浏览器内核的一个封装，这种前后端分离的好处是后端可以提供相同的接口，前端可以依靠自身特点去实现，避免了耦合。</p>
 <p>所以最终的实现上，使用Python实现了一个web服务器，再使用HTML编写了一个页面用于交互，套用了一些CSS模板后，交互效果还不错。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/web console.png" width="70%" height="70%">
-
-<center><p>Web Console</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/web console.png" width="70%" height="70%" alt="Web Console">
 
 <p>除了用户登陆、配置更新等交互，还有一点是，用户如何运行web服务器，如果还是直接通过命令行执行Python的方式，多少还是有点捞。为此，使用<a href="https://github.com/pyinstaller/pyinstaller">PyInstaller</a>将脚本、资源文件和解释器封装成一个可执行文件，并为其设置了一个图标，这样一来用户可以通过直接运行可执行文件的方式去运行工具（不过PyInstaller打包时会依赖一些平台特定的动态库，这部分不是很通用，不同的操作系统上可能需要重新打包）。</p>
 <p>同时还使用了<a href="https://github.com/moses-palmer/pystray">PyStray</a>为工具创建了一个托盘图标，用户可以通过点击图标的方式打开web页面进行交互，同时可以通过图标来退出程序。</p>
-<img src="/images/2022-02-17-Mattermost-auto-reply-tool/tray.png" width="70%" height="70%">
-
-<center><p>Tray Icon</p></center>
+<img src="/images/2022-02-17-Mattermost-auto-reply-tool/tray.png" width="70%" height="70%" alt="Tray Icon">
 
 <h3 id="Todo"><a href="#Todo" class="headerlink" title="Todo"></a>Todo</h3><ul>
 <li>群聊的自动回复：在群聊收到的post中，依据特定的触发词，如@，触发自动回复；</li>
@@ -168,53 +148,25 @@
       </tags>
   </entry>
   <entry>
-    <title>Travel in Hangzhou in 2021</title>
+    <title>Travels of Martzki: Travel in Hangzhou in 2021</title>
     <url>/2022/02/07/Travel-in-Hangzhou-in-2021/</url>
     <content><![CDATA[<p>2021年的清明节假期，是我的第一次杭州旅行。一是想体验下杭州的清明时节，欣赏下西湖美景；二是亲身感受下杭州作为一线IT城市的氛围。  </p>
 <span id="more"></span>
 <h1 id="住"><a href="#住" class="headerlink" title="住"></a>住</h1><p>由于假期比较短，所以选择了住在西湖附近。其实最初想选择湖边的酒店或者民宿，不过由于预订的时间和💰的问题，最后选择了南高峰附近的民宿。<br>事后觉得住在西湖附近的决定是正确的，一是本身假期短，主要游玩的地方也是西湖，距离会近一些；二是节假日的杭州，交通真是太堵了，特别是西湖景区附近，打车非常困难。</p>
 <h1 id="行"><a href="#行" class="headerlink" title="行"></a>行</h1><p>出行方式主要是打车和公共交通为主。<br>杭州有地铁，但西湖景区附近没有。西湖景区附近，出行方式的便捷度：步行 &gt; 共享单车 &gt; 公交车 &gt; 打车。<br>从我们在西湖景区附近打车的经验来看，较早或较晚的时候还是可以打到车的，但是白天，特别是午晚餐时间，打车十分困难，这个时间点主要选择步行或共享单车，不过高峰期共享单车也是一车难求。<br>PS 杭州的出租车属于比较老旧的燃油汽车，乘坐体验比较差，电动车的普及率比较低。</p>
 <h1 id="玩"><a href="#玩" class="headerlink" title="玩"></a>玩</h1><p>西湖附近的主要游玩景点就是“西湖十景”，虽然通常这些官方推荐的景点质量良莠不齐，但西湖附近的游玩基本离不开这些景点。<br>湖边游览的顺序基本上是断桥出发，一路游览景色走到苏堤。</p>
-<h2 id="雷峰塔"><a href="#雷峰塔" class="headerlink" title="雷峰塔"></a>雷峰塔</h2><p>西湖十景之一雷峰夕照中的雷峰，指的就是雷峰塔，同时也是白蛇传中白娘子被镇压的宝塔。<br>但实际上，这是一个我个人不推荐的景点。<br>首先，目前的雷峰塔经历了重建，最初的雷峰塔的断壁残垣，保留在目前的雷峰塔的底层，可供游客远程观赏，不过也就是一些砖块罢了；<br>其次，西湖十景的雷峰夕照，指的是夕阳西下时，阳光照在西湖和雷峰塔附近的景色。雷峰塔本身，塔内景色非常普通，登到最高层，可以眺望西湖，不过景色一般（和在黄鹤楼上眺望长江差不多一个意思）；<br>最后，还是人多😑。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_2048.jpeg" width="70%" height="70%"></p>
-<center><p>雷峰塔中的白蛇传木雕</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1502.jpeg" width="70%" height="70%">
-<center><p>雷峰塔</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_7644.jpeg" width="70%" height="70%">
-<center><p>雷峰塔上眺望的西湖景色</p></center>  
-
+<h2 id="雷峰塔"><a href="#雷峰塔" class="headerlink" title="雷峰塔"></a>雷峰塔</h2><p>西湖十景之一雷峰夕照中的雷峰，指的就是雷峰塔，同时也是白蛇传中白娘子被镇压的宝塔。<br>但实际上，这是一个我个人不推荐的景点。<br>首先，目前的雷峰塔经历了重建，最初的雷峰塔的断壁残垣，保留在目前的雷峰塔的底层，可供游客远程观赏，不过也就是一些砖块罢了；<br>其次，西湖十景的雷峰夕照，指的是夕阳西下时，阳光照在西湖和雷峰塔附近的景色。雷峰塔本身，塔内景色非常普通，登到最高层，可以眺望西湖，不过景色一般（和在黄鹤楼上眺望长江差不多一个意思）；<br>最后，还是人多😑。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_2048.jpeg" width="70%" height="70%" alt="雷峰塔中的白蛇传木雕"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1502.jpeg" width="70%" height="70%" alt="雷峰塔"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_7644.jpeg" width="70%" height="70%" alt="雷峰塔上眺望的西湖景色"></p>
 <h2 id="断桥"><a href="#断桥" class="headerlink" title="断桥"></a>断桥</h2><p>西湖十景之一的断桥残雪中的断桥，是我们的西湖游览行程的起点，同样也是许多人的起点，所以人很多，如果想要拍照的话，可以选择早一点过去。<br>不过清明假期杭州最低气温只有十度左右，清晨的湖边，特别是阴天，还是非常冷的，需要做好一定的御寒准备。<br>此外，白堤连接着锦带桥和断桥，在桥上拍照时如果断桥人多可以考虑在锦带桥代替下🤡。  </p>
 <h2 id="西湖自划船"><a href="#西湖自划船" class="headerlink" title="西湖自划船"></a>西湖自划船</h2><p>西湖边有多个划船的停泊点，需要注意的是至少需要两个人，同时受湖中风浪影响，风浪过大时，是不允许划船的。如果一定要划船的话，需要提前做好准备。</p>
-<h2 id="三潭映月"><a href="#三潭映月" class="headerlink" title="三潭映月"></a>三潭映月</h2><p>西湖十景之一，1元人民币背面取景地，位于西湖中央的湖中岛。上下岛需要从西湖边坐船，有多个码头，可以从不同的码头上下。<br>虽然节假日的杭州哪里都人多，但湖中岛的人格外的多，因为岛上面积不大，离开岛也需要排队坐船，所以导致离岛的队伍很长，上岛容易离岛难。<br>本身景点主要是岛上的一些建筑和湖中的三个石塔，景点本身差强人意，但人实在是太多，和人群摩肩接踵大大降低了游览的兴致。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6158.jpeg" width="70%" height="70%"></p>
-<center><p>三潭映月中的湖中石塔和雷峰塔</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1452.jpeg" width="70%" height="70%">
-<center><p>岛内景色（一）</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1295.jpeg" width="70%" height="70%">
-<center><p>岛内景色（二）</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1913.jpeg" width="70%" height="70%">
-<center><p>岛内景色（三）</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6983.jpeg" width="70%" height="70%">
-<center><p>岛上码头排队的游客</p></center>
-
-<h2 id="灵隐寺"><a href="#灵隐寺" class="headerlink" title="灵隐寺"></a>灵隐寺</h2><p>灵隐寺是西湖景区的比较有名的寺庙了，寺庙本身不小，依山而建。不过我本人对寺庙相关的宗教文化不感冒，并且由于我们去的时候几乎已经走了一天了，随便看了看我就歇菜了🤡，并没有去到最高的庙宇。<br>如果对宗教文化比较感兴趣，或者喜欢到处打卡的话，可以一去；如果像我一样的话就不建议去了。<br>另外，在灵隐寺可以乘坐索道去北高峰，但是索道开放时间有限制，且北高峰不属于灵隐寺的范围，可根据个人情况选择。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6106.jpeg" width="70%" height="70%"></p>
-<center><p>灵隐寺</p></center>
-
-<h2 id="杨公堤"><a href="#杨公堤" class="headerlink" title="杨公堤"></a>杨公堤</h2><p>杨公堤说是和苏堤白堤齐名，但实际上游客比热门的那些景点要少多了，我们去的时候甚至没有什么人。这里的树林环境很好，很放松，时间不急的话可以来这里散散步。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1974.jpeg" width="70%" height="70%"></p>
-<center><p>杨公堤湖边</p></center>
-
-<h2 id="九溪十八涧"><a href="#九溪十八涧" class="headerlink" title="九溪十八涧"></a>九溪十八涧</h2><p>九溪十八涧是一条漫长的山路，一路上围绕着高耸的树林，时不时的还有一些茶园，路过村落时各家各户也在售卖自家的茶叶。随着交错的溪涧，从龙井一路下山，最终可以直接到达钱塘江边，虽然不在西湖边，不过是一个是一个散步的好地方，游客也不多，同时尽管整个景区有着不计其数的溪涧，得益于景区的工作人员的垃圾打捞，水很干净。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6103.jpeg" width="70%" height="70%"></p>
-<center><p>九溪十八涧</p></center>
-
-<h2 id="茶叶博物馆"><a href="#茶叶博物馆" class="headerlink" title="茶叶博物馆"></a>茶叶博物馆</h2><p>茶叶博物馆最初是在行程计划之中的，后来由于时间紧迫，原本不打算去了，但我们在乘坐公交车时，错误地提前了一站下车。不过没想到下车以后发现了一大片茶园，仔细一看居然就是之前计划去的茶叶博物馆。<br>我们到达的时候已经是晚饭时间了，整个茶园几乎没什么人，非常适合拍照。关于博物馆内部，由于是节假日，同时也到了晚饭时间，就没有进去游览了。如果对博物馆内部有兴趣，可以提前咨询下开放时间。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_2259.jpeg" width="70%" height="70%"></p>
-<center><p>茶叶博物馆的茶园</p></center>
-
+<h2 id="三潭映月"><a href="#三潭映月" class="headerlink" title="三潭映月"></a>三潭映月</h2><p>西湖十景之一，1元人民币背面取景地，位于西湖中央的湖中岛。上下岛需要从西湖边坐船，有多个码头，可以从不同的码头上下。<br>虽然节假日的杭州哪里都人多，但湖中岛的人格外的多，因为岛上面积不大，离开岛也需要排队坐船，所以导致离岛的队伍很长，上岛容易离岛难。<br>本身景点主要是岛上的一些建筑和湖中的三个石塔，景点本身差强人意，但人实在是太多，和人群摩肩接踵大大降低了游览的兴致。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6158.jpeg" width="70%" height="70%" alt="三潭映月中的湖中石塔和雷峰塔"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1452.jpeg" width="70%" height="70%" alt="岛内景色（一）"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1295.jpeg" width="70%" height="70%" alt="岛内景色（二）"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1913.jpeg" width="70%" height="70%" alt="岛内景色（三）"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6983.jpeg" width="70%" height="70%" alt="岛上码头排队的游客"></p>
+<h2 id="灵隐寺"><a href="#灵隐寺" class="headerlink" title="灵隐寺"></a>灵隐寺</h2><p>灵隐寺是西湖景区的比较有名的寺庙了，寺庙本身不小，依山而建。不过我本人对寺庙相关的宗教文化不感冒，并且由于我们去的时候几乎已经走了一天了，随便看了看我就歇菜了🤡，并没有去到最高的庙宇。<br>如果对宗教文化比较感兴趣，或者喜欢到处打卡的话，可以一去；如果像我一样的话就不建议去了。<br>另外，在灵隐寺可以乘坐索道去北高峰，但是索道开放时间有限制，且北高峰不属于灵隐寺的范围，可根据个人情况选择。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6106.jpeg" width="70%" height="70%" alt="灵隐寺"></p>
+<h2 id="杨公堤"><a href="#杨公堤" class="headerlink" title="杨公堤"></a>杨公堤</h2><p>杨公堤说是和苏堤白堤齐名，但实际上游客比热门的那些景点要少多了，我们去的时候甚至没有什么人。这里的树林环境很好，很放松，时间不急的话可以来这里散散步。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_1974.jpeg" width="70%" height="70%" alt="杨公堤湖边"></p>
+<h2 id="九溪十八涧"><a href="#九溪十八涧" class="headerlink" title="九溪十八涧"></a>九溪十八涧</h2><p>九溪十八涧是一条漫长的山路，一路上围绕着高耸的树林，时不时的还有一些茶园，路过村落时各家各户也在售卖自家的茶叶。随着交错的溪涧，从龙井一路下山，最终可以直接到达钱塘江边，虽然不在西湖边，不过是一个是一个散步的好地方，游客也不多，同时尽管整个景区有着不计其数的溪涧，得益于景区的工作人员的垃圾打捞，水很干净。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6103.jpeg" width="70%" height="70%" alt="九溪十八涧"></p>
+<h2 id="茶叶博物馆"><a href="#茶叶博物馆" class="headerlink" title="茶叶博物馆"></a>茶叶博物馆</h2><p>茶叶博物馆最初是在行程计划之中的，后来由于时间紧迫，原本不打算去了，但我们在乘坐公交车时，错误地提前了一站下车。不过没想到下车以后发现了一大片茶园，仔细一看居然就是之前计划去的茶叶博物馆。<br>我们到达的时候已经是晚饭时间了，整个茶园几乎没什么人，非常适合拍照。关于博物馆内部，由于是节假日，同时也到了晚饭时间，就没有进去游览了。如果对博物馆内部有兴趣，可以提前咨询下开放时间。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_2259.jpeg" width="70%" height="70%" alt="茶叶博物馆的茶园"></p>
 <h1 id="吃"><a href="#吃" class="headerlink" title="吃"></a>吃</h1><p>在杭州吃了几顿杭帮菜，通常都有东坡肉、龙井秋葵什么的，最不推荐的就是西湖醋鱼，这玩意应该99%的人都不会觉得好吃。<br>杭州有一些全国连锁的杭帮菜的总店，像绿茶和外婆家，如果喜欢这些餐厅也可以去试试它们的总店。</p>
 <h2 id="河坊街"><a href="#河坊街" class="headerlink" title="河坊街"></a>河坊街</h2><p>河坊街没什么说的，就是那种每个旅游城市都会有的那种充斥着义乌小商品、坑一波外地游客就走的商业街，类似武汉的户部巷，极不推荐。</p>
 <h2 id="春夏秋冬"><a href="#春夏秋冬" class="headerlink" title="春夏秋冬"></a>春夏秋冬</h2><p>去这家餐厅其实是一个巧合，我们当时在茶叶博物馆游览完成后，准备前往民宿老板推荐的一家杭帮菜馆——茶人村，但到了餐厅发现排队非常夸张，还有很多旅游大巴也带着游客在这里就餐。虽然餐厅装修上有一定的特色，但整个餐厅有一股浓浓的网红风，加上过长的等待时间，我们就换到了隔壁的春夏秋冬。<br>餐厅的环境不错，菜式也比较有特色（照片不知道咋的没了🤡），还有室外餐位，不过当时杭州的天气还是比较凉的，也没有人选择室外就餐。整体的服务质量也还不错，最重要的是不怎么需要排队。</p>
-<h2 id="Doux-Amour"><a href="#Doux-Amour" class="headerlink" title="Doux Amour"></a>Doux Amour</h2><p>这家其实不是杭帮菜，而是一家网红的动物泡芙店，<a href="https://www.douxamour.com.au/">总店</a>应该是在澳洲，国内似乎只有杭州有分店。<br>店里的所有泡芙都是小动物造型，非常可爱。但是泡芙本身由于保质期问题，不太适合当作伴手礼，去吃个下午茶拍拍照片还是不错的。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6276.jpeg" width="70%" height="70%"></p>
-<center><p>Doux Amour的菜单</p></center>
-<img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6272.jpeg" width="70%" height="70%">
-<center><p>Doux Amour的动物泡芙</p></center>
-
+<h2 id="Doux-Amour"><a href="#Doux-Amour" class="headerlink" title="Doux Amour"></a>Doux Amour</h2><p>这家其实不是杭帮菜，而是一家网红的动物泡芙店，<a href="https://www.douxamour.com.au/">总店</a>应该是在澳洲，国内似乎只有杭州有分店。<br>店里的所有泡芙都是小动物造型，非常可爱。但是泡芙本身由于保质期问题，不太适合当作伴手礼，去吃个下午茶拍拍照片还是不错的。<br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6276.jpeg" width="70%" height="70%" alt="Doux Amour的菜单"><br><img src="/images/2022-02-07-Travel-in-Hangzhou-in-2021/IMG_6272.jpeg" width="70%" height="70%" alt="Doux Amour的动物泡芙"></p>
 <h2 id="国宾馆紫薇厅"><a href="#国宾馆紫薇厅" class="headerlink" title="国宾馆紫薇厅"></a>国宾馆紫薇厅</h2><p>知乎上看到的推荐，原文中提到知道的人少，去的人不多，不过这些年估计各种安利种草后，看到推荐慕名而去的人也不少了。<br>紫薇厅不接受预订，开放时间应该是下午四点。我们在四点左右到达紫薇厅门口，被告知已经人满了不再接待，不知道是真满了还是被大佬们预定了🤡，有兴趣的话可以试一试。</p>
 ]]></content>
       <categories>
@@ -336,7 +288,7 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#x61;&#114;&#115;&#x31;&#x34;&#x38;&#x35;&#48;&#x40;&#103;&#x6d;&#x61;&#105;&#x6c;&#x2e;&#x63;&#111;&#109;">&#109;&#x61;&#114;&#115;&#x31;&#x34;&#x38;&#x35;&#48;&#x40;&#103;&#x6d;&#x61;&#105;&#x6c;&#x2e;&#x63;&#111;&#109;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#x72;&#115;&#x31;&#x34;&#56;&#53;&#48;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#99;&#x6f;&#x6d;">&#x6d;&#x61;&#x72;&#115;&#x31;&#x34;&#56;&#53;&#48;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#99;&#x6f;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
       <categories>
         <category>Other</category>
