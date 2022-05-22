@@ -203,6 +203,87 @@
 
     
     <article
+  id="post-How-does-QEMU-notify-Guest-the-nic-link-status-changed"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h2 itemprop="name">
+  <a class="article-title" href="/2022/05/22/How-does-QEMU-notify-Guest-the-nic-link-status-changed/"
+    >How does QEMU notify Guest the nic link status changed</a> 
+</h2>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2022/05/22/How-does-QEMU-notify-Guest-the-nic-link-status-changed/" class="article-date">
+  <time datetime="2022-05-22T05:27:46.000Z" itemprop="datePublished">2022-05-22</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+   
+    </div>
+      
+    <div class="article-entry" itemprop="articleBody">
+       
+  <p>事情的起因是同事问到，Guest内部virtio网卡的链路状态是如何改变的，于是从virtio网卡入手，梳理了一下QEMU的网卡链路状态的相关代码。</p>
+<h1 id="virtio-net-set-link-status"><a href="#virtio-net-set-link-status" class="headerlink" title="virtio_net_set_link_status"></a>virtio_net_set_link_status</h1><p>搜索相关代码，能够找到设置virtio-net链路状态的函数<code>virtio_net_set_link_status</code>，该函数会判断如果链路状态发生了改变，则调用<code>virtio_notify_config</code>通知Guest内部。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">virtio_net_set_link_status</span><span class="params">(NetClientState *nc)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    VirtIONet *n = qemu_get_nic_opaque(nc);</span><br><span class="line">    VirtIODevice *vdev = VIRTIO_DEVICE(n);</span><br><span class="line">    <span class="keyword">uint16_t</span> old_status = n-&gt;status;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (nc-&gt;link_down)</span><br><span class="line">        n-&gt;status &amp;= ~VIRTIO_NET_S_LINK_UP;</span><br><span class="line">    <span class="keyword">else</span></span><br><span class="line">        n-&gt;status |= VIRTIO_NET_S_LINK_UP;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (n-&gt;status != old_status)</span><br><span class="line">        virtio_notify_config(vdev);</span><br><span class="line"></span><br><span class="line">    virtio_net_set_status(vdev, vdev-&gt;status);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>在初始化virtio-net的<code>NetClientInfo</code>的时候<code>link_status_changed</code>函数设置为<code>virtio_net_set_link_status</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> NetClientInfo net_virtio_info = &#123;</span><br><span class="line">    .type = NET_CLIENT_DRIVER_NIC,</span><br><span class="line">    .size = <span class="keyword">sizeof</span>(NICState),</span><br><span class="line">    .can_receive = virtio_net_can_receive,</span><br><span class="line">    .receive = virtio_net_receive,</span><br><span class="line">    .link_status_changed = virtio_net_set_link_status,</span><br><span class="line">    .query_rx_filter = virtio_net_query_rxfilter,</span><br><span class="line">    .announce = virtio_net_announce,</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h1 id="link-status-changed"><a href="#link-status-changed" class="headerlink" title="link_status_changed"></a>link_status_changed</h1><p>从函数命名上可以看出，该函数在链路状态发生改变后被调用。</p>
+<p>该函数有2个调用处：<code>qmp_set_link</code>和<code>qemu_del_net_client</code>。</p>
+<h2 id="qmp-set-link"><a href="#qmp-set-link" class="headerlink" title="qmp_set_link"></a>qmp_set_link</h2><p>qmp开头的函数很明显，都是QMP(<a target="_blank" rel="noopener" href="https://wiki.qemu.org/Documentation/QMP">QEMU Machine Protocol</a>）相关的命令对应的实现函数，一般场景下都是用户通过HMP（<a target="_blank" rel="noopener" href="https://wiki.qemu.org/ToDo/HMP">Human Monitor Interface</a>）接口去手动设置的。</p>
+<p>所以，一种显然的调用方式为：通过QMP，主动设置链路状态。</p>
+<p>除此之外，在后端为vhost-user的场景下，QEMU代码有特殊处理：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">net_vhost_user_event</span><span class="params">(<span class="keyword">void</span> *opaque, QEMUChrEvent event)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">    <span class="keyword">switch</span> (event) &#123;</span><br><span class="line">    <span class="keyword">case</span> CHR_EVENT_OPENED:</span><br><span class="line">......</span><br><span class="line">        qmp_set_link(name, <span class="literal">true</span>, &amp;err);</span><br><span class="line">......</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">    <span class="keyword">case</span> CHR_EVENT_CLOSED:</span><br><span class="line">        <span class="comment">/* a close event may happen during a read/write, but vhost</span></span><br><span class="line"><span class="comment">         * code assumes the vhost_dev remains setup, so delay the</span></span><br><span class="line"><span class="comment">         * stop &amp; clear to idle.</span></span><br><span class="line"><span class="comment">         * <span class="doctag">FIXME:</span> better handle failure in vhost code, remove bh</span></span><br><span class="line"><span class="comment">         */</span></span><br><span class="line">        <span class="keyword">if</span> (s-&gt;watch) &#123;</span><br><span class="line">......</span><br><span class="line">            aio_bh_schedule_oneshot(ctx, chr_closed_bh, opaque);</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">    <span class="keyword">case</span> CHR_EVENT_BREAK:</span><br><span class="line">    <span class="keyword">case</span> CHR_EVENT_MUX_IN:</span><br><span class="line">    <span class="keyword">case</span> CHR_EVENT_MUX_OUT:</span><br><span class="line">        <span class="comment">/* Ignore */</span></span><br><span class="line">        <span class="keyword">break</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (err) &#123;</span><br><span class="line">        error_report_err(err);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>即后端为vhost-user时，当对应的socket连接事件发生，主动从代码中调用<code>qmp_set_link</code>，设置网卡的链路状态为UP；当对应socket断开事件发生，异步调用一次<code>chr_closed_bh</code>，该函数中进行后端断开对应的清理操作，包括调用<code>qmp_set_link</code>将网卡的链路状态设置为DOWN。</p>
+<h2 id="qemu-del-net-client"><a href="#qemu-del-net-client" class="headerlink" title="qemu_del_net_client"></a>qemu_del_net_client</h2><p>这个函数主要是清理NetClientState的相关联资源，需要注意的是，这里调用<code>link_status_changed</code>并不是设置当前被清理的NetClientState对应设备的状态，而是设置peer的状态（QEMU网络虚拟化中对虚拟网络设备抽象为device和backend，如virtio-net/vhost-net、e1000/tap都是device/backend的对应关系，两者互为peer，详细可参考<a target="_blank" rel="noopener" href="https://wiki.qemu.org/Documentation/Networking">Wiki</a>）：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">qemu_del_net_client</span><span class="params">(NetClientState *nc)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">    <span class="comment">/* If there is a peer NIC, delete and cleanup client, but do not free. */</span></span><br><span class="line">    <span class="keyword">if</span> (nc-&gt;peer &amp;&amp; nc-&gt;peer-&gt;info-&gt;type == NET_CLIENT_DRIVER_NIC) &#123;</span><br><span class="line">        NICState *nic = qemu_get_nic(nc-&gt;peer);</span><br><span class="line">        <span class="keyword">if</span> (nic-&gt;peer_deleted) &#123;</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        nic-&gt;peer_deleted = <span class="literal">true</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; queues; i++) &#123;</span><br><span class="line">            ncs[i]-&gt;peer-&gt;link_down = <span class="literal">true</span>;</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (nc-&gt;peer-&gt;info-&gt;link_status_changed) &#123;</span><br><span class="line">            nc-&gt;peer-&gt;info-&gt;link_status_changed(nc-&gt;peer);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; queues; i++) &#123;</span><br><span class="line">            qemu_cleanup_net_client(ncs[i]);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>一般而言，当backend对应的NetClientState被删除时，会调用<code>qemu_del_net_client</code>，通知peer网卡链路状态发生了改变。</p>
+<p>该函数的调用处，除了各类型网卡的初始化异常处理逻辑，和关机流程，就只有<code>qmp_netdev_del</code>（又是一处QMP的接口调用😅），也就说明，只有通过QMP删除netdev时，会走到这个逻辑。</p>
+<h1 id="Conclusion"><a href="#Conclusion" class="headerlink" title="Conclusion"></a>Conclusion</h1><p>上述代码分析中，除了入手点从virtio-net，其余都是对<code>link_status_changed</code>的调用分析，即该流程对QEMU的其他类型网卡同样适用。</p>
+<p>正常运行过程中会引起Guest内部链路状态改变的场景如下：</p>
+<ul>
+<li>virtio-net网卡的backend为vhost-user时，对应的unix socket发生断开、连接事件；</li>
+<li>通过qmp，主动设置对应网卡的链路状态；</li>
+<li>通过qmp，删除backend，通知peer网卡链路状态发生改变。</li>
+</ul>
+<p><code>qemu_del_net_client</code>本身还有其他调用处，如关机流程、backend初始化失败的异常处理逻辑，但不属于正常运行过程中的场景，场景也比较简单，所以就不作分析了。</p>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <footer class="article-footer">
+       
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Virtio-Vhost/" rel="tag">Virtio&#x2F;Vhost</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Virtualization/" rel="tag">Virtualization</a></li></ul>
+
+    </footer>
+  </div>
+
+    
+ 
+    
+</article>
+
+    
+    <article
   id="post-Travel-in-Gansu-and-Qinghai-in-2020"
   class="article article-type-post"
   itemscope
@@ -537,7 +618,7 @@
   <blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#x61;&#x72;&#x73;&#x31;&#x34;&#x38;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#109;">&#109;&#x61;&#x72;&#x73;&#x31;&#x34;&#x38;&#x35;&#x30;&#x40;&#103;&#109;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#109;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#97;&#114;&#115;&#x31;&#x34;&#56;&#53;&#x30;&#x40;&#103;&#109;&#97;&#x69;&#x6c;&#x2e;&#99;&#x6f;&#x6d;">&#x6d;&#97;&#114;&#115;&#x31;&#x34;&#56;&#53;&#x30;&#x40;&#103;&#109;&#97;&#x69;&#x6c;&#x2e;&#99;&#x6f;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%"> 
       <!-- reward -->
       
