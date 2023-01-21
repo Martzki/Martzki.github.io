@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>Record of learning AF_XDP |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-Record-of-learning-AF-XDP"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  Record of learning AF_XDP
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/Record-of-learning-AF-XDP/" class="article-date">
+  <time datetime="2023-01-21T14:27:20.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">6.4k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">29 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Preface"><a href="#Preface" class="headerlink" title="Preface"></a>Preface</h1><p>近年eBPF技术大火，在网络方向上最火的大概就是cilium和XDP了，前者是一个前景非常广阔的CNI，后者是内核里基于eBPF的一个包处理框架。</p>
+<p>关于eBPF或XDP，网上有很多介绍文章，这里不会去详细介绍其基础原理，只记录下学习过程中遇到的问题以及对应代码。</p>
+<p><code>AF_XDP</code>是内核基于XDP的一层socket封装，和<code>AF_INET</code>、<code>AF_PACKET</code>一样，是一种协议族，可以直接通过socket相关调用去使用。</p>
+<p>XDP相关实现的封装层次从低到高为：<code>eBPF</code>-&gt;<code>XDP</code>-&gt;<code>AF_XDP</code>-&gt;<code>libbpf</code>-&gt;<code>APP</code>。</p>
+<p><code>AF_XDP</code>相关的代码主要分为三部分：</p>
+<ul>
+<li>内核：内核代码中的对应实现，对应代码路径为<code>kernel/net/xdp</code>。</li>
+<li>libbpf：eBPF接口的封装库，eBPF编程基本都依赖这个库，一些关键特性，如CO-RE都是基于libbpf实现的，对应代码路径为<code>kernel/tools/lib/bpf/xdp.c</code>。</li>
+<li>用户态应用代码：使用<code>AF_XDP</code>的用户态应用代码，内核示例为<code>kernel/samples/bpf/xsock_user.c</code>，作为DPDK开发者，我主要关注DPDK代码中的<code>PMD_AF_XDP</code>相关代码，代码路径为<code>dpdk/drivers/net/af_xdp</code>。</li>
+</ul>
+<p>关于<code>AF_XDP</code>可以参考<a target="_blank" rel="noopener" href="https://www.kernel.org/doc/html/latest/networking/af_xdp.html">内核文档</a>和<a target="_blank" rel="noopener" href="https://rexrock.github.io/post/af_xdp1/">AF_XDP技术详解</a>。</p>
+<p>本文的代码分析基于DPDK 19.11，内核版本4.18以及内核版本对应的libbpf。</p>
+<h1 id="PMD-AF-XDP"><a href="#PMD-AF-XDP" class="headerlink" title="PMD_AF_XDP"></a>PMD_AF_XDP</h1><p><code>PMD_AF_XDP</code>也是一种DPDK提供的PMD，主要用途和<code>PMD_AF_PACKET</code>相同，从内核驱动管理的网卡设备获取报文。由于两者都是利用内核socket提供的机制，所以实现上也比较相似，基本就是先创建对应协议族的socket，然后bind到对应的网口上，再通过<code>send</code>/<code>recv</code>等调用去进行报文收发（<code>AF_XDP</code>在收包时不需要调用<code>recv</code>）。</p>
+<p><code>PMD_AF_XDP</code>对应的<code>rte_vdev_driver</code>如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> <span class="class"><span class="keyword">struct</span> <span class="title">rte_vdev_driver</span> <span class="title">pmd_af_xdp_drv</span> =</span> &#123;</span><br><span class="line">	.probe = rte_pmd_af_xdp_probe,</span><br><span class="line">	.remove = rte_pmd_af_xdp_remove,</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Probe"><a href="#Probe" class="headerlink" title="Probe"></a>Probe</h2><p>所有PMD的初始化流程都一样，调用PMD对应的probe函数，这里是<code>rte_pmd_af_xdp_probe</code>。</p>
+<p>参数解析、合法性检查等通用流程就直接跳过了，看完整个probe函数，发现基本上就是赋值pmd相关的通用成员，<code>dev_ops</code>、<code>rx_pkt_burst</code>和<code>tx_pkt_burst</code>等。</p>
+<p>probe流程中，值得注意的点为收发包队列数据结构初始化完之后，设置了收发包队列互为pair：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; queue_cnt; i++) &#123;</span><br><span class="line">	internals-&gt;tx_queues[i].<span class="built_in">pair</span> = &amp;internals-&gt;rx_queues[i];</span><br><span class="line">	internals-&gt;rx_queues[i].<span class="built_in">pair</span> = &amp;internals-&gt;tx_queues[i];</span><br><span class="line">	internals-&gt;rx_queues[i].xsk_queue_idx = start_queue_idx + i;</span><br><span class="line">	internals-&gt;tx_queues[i].xsk_queue_idx = start_queue_idx + i;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>除此之外，其他都是通用流程，这里就有一个疑惑：socket在哪创建的？</p>
+<p>既然probe流程没有，那就接着看初始化流程，<code>probe</code>完成后，通常就是<code>configure</code>、<code>queue setup</code>，再接着就是<code>start</code>。</p>
+<p>然而<code>configure</code>流程和<code>start</code>实现都很简单，不涉及socket创建：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">eth_dev_start</span><span class="params">(struct rte_eth_dev *dev)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	dev-&gt;data-&gt;dev_link.link_status = ETH_LINK_UP;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">eth_dev_configure</span><span class="params">(struct rte_eth_dev *dev)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="comment">/* rx/tx must be paired */</span></span><br><span class="line">	<span class="keyword">if</span> (dev-&gt;data-&gt;nb_rx_queues != dev-&gt;data-&gt;nb_tx_queues)</span><br><span class="line">		<span class="keyword">return</span> -EINVAL;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>那么唯一可能就是在<code>queue setup</code>中。</p>
+<h2 id="RX-queue-setup"><a href="#RX-queue-setup" class="headerlink" title="RX queue setup"></a>RX queue setup</h2><p>先看收包队列<code>eth_rx_queue_setup</code>，其中实现很简单，检查了MBUF空间和XDP帧大小是否匹配后调用了<code>xsk_configure</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">xsk_configure</span><span class="params">(struct pmd_internals *internals, struct pkt_rx_queue *rxq,</span></span></span><br><span class="line"><span class="params"><span class="function">	      <span class="keyword">int</span> ring_size)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="comment">/* Init umem. */</span></span><br><span class="line">	rxq-&gt;umem = xdp_umem_configure(internals, rxq);</span><br><span class="line">	<span class="keyword">if</span> (rxq-&gt;umem == <span class="literal">NULL</span>)</span><br><span class="line">		<span class="keyword">return</span> -ENOMEM;</span><br><span class="line">	txq-&gt;umem = rxq-&gt;umem;</span><br><span class="line">......</span><br><span class="line">	<span class="comment">/* Create xsk. */</span></span><br><span class="line">	ret = xsk_socket__create(&amp;rxq-&gt;xsk, internals-&gt;if_name,</span><br><span class="line">			rxq-&gt;xsk_queue_idx, rxq-&gt;umem-&gt;umem, &amp;rxq-&gt;rx,</span><br><span class="line">			&amp;txq-&gt;tx, &amp;cfg);</span><br><span class="line">	<span class="keyword">if</span> (ret) &#123;</span><br><span class="line">		AF_XDP_LOG(ERR, <span class="string">&quot;Failed to create xsk socket.\n&quot;</span>);</span><br><span class="line">		<span class="keyword">goto</span> err;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>主要流程包含两个部分，初始化<code>umem</code>、创建<code>xsk</code>（AF_XDP socket）。</p>
+<h3 id="UMEM"><a href="#UMEM" class="headerlink" title="UMEM"></a>UMEM</h3><p>关于<code>umem</code>官方说明如下：</p>
+<blockquote>
+<p>UMEM is a region of virtual contiguous memory, divided into equal-sized frames. An UMEM is associated to a netdev and a specific queue id of that netdev. It is created and configured (chunk size, headroom, start address and size) by using the XDP_UMEM_REG setsockopt system call. A UMEM is bound to a netdev and queue id, via the bind() system call.</p>
+<p>An AF_XDP is socket linked to a single UMEM, but one UMEM can have multiple AF_XDP sockets. To share an UMEM created via one socket A, the next socket B can do this by setting the XDP_SHARED_UMEM flag in struct sockaddr_xdp member sxdp_flags, and passing the file descriptor of A to struct sockaddr_xdp member sxdp_shared_umem_fd.</p>
+<p>The UMEM has two single-producer/single-consumer rings that are used to transfer ownership of UMEM frames between the kernel and the user-space application.</p>
+</blockquote>
+<p><code>AF_XDP</code>可以通过mmap在用户态和内核态之间传递数据，这块共享内存就是<code>umem</code>。在用户态应用中先初始化好<code>umem</code>，再作为<code>xsk_socket__create</code>的参数传入，在内部完成内核态内存和用户态内存的map。</p>
+<p>需要注意的一点是，<code>umem</code>初始化流程中，收发包队列的<code>umem</code>指向的是同样的内存，这样的好处是在收发包队列之间转换时不需要拷贝：</p>
+<blockquote>
+<p>RX and TX can share the same UMEM so that a packet does not have to be copied between RX and TX. Moreover, if a packet needs to be kept for a while due to a possible retransmit, the descriptor that points to that packet can be changed to point to another and reused right away. This again avoids copying data.</p>
+</blockquote>
+<p>在<code>PMD_AF_XDP</code>的实现中，每个<code>umem</code>对应了一个<code>buf_ring</code>，用于缓存具体的<code>umem</code>和批量操作：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> struct</span></span><br><span class="line"><span class="function">xsk_umem_info *<span class="title">xdp_umem_configure</span><span class="params">(struct pmd_internals *internals,</span></span></span><br><span class="line"><span class="params"><span class="function">				  struct pkt_rx_queue *rxq)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="built_in">snprintf</span>(ring_name, <span class="keyword">sizeof</span>(ring_name), <span class="string">&quot;af_xdp_ring_%s_%u&quot;</span>,</span><br><span class="line">		       internals-&gt;if_name, rxq-&gt;xsk_queue_idx);</span><br><span class="line">	umem-&gt;buf_ring = rte_ring_create(ring_name,</span><br><span class="line">					 ETH_AF_XDP_NUM_BUFFERS,</span><br><span class="line">					 rte_socket_id(),</span><br><span class="line">					 <span class="number">0x0</span>);</span><br><span class="line">	<span class="keyword">if</span> (umem-&gt;buf_ring == <span class="literal">NULL</span>) &#123;</span><br><span class="line">		AF_XDP_LOG(ERR, <span class="string">&quot;Failed to create rte_ring\n&quot;</span>);</span><br><span class="line">		<span class="keyword">goto</span> err;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; ETH_AF_XDP_NUM_BUFFERS; i++)</span><br><span class="line">		rte_ring_enqueue(umem-&gt;buf_ring,</span><br><span class="line">				 (<span class="keyword">void</span> *)(i * ETH_AF_XDP_FRAME_SIZE));</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到<code>buf_ring</code>的元素个数为<code>ETH_AF_XDP_NUM_BUFFERS</code>，和<code>umem</code>的元素个数是相同的，且初始化为<code>umem</code>元素的偏移，这也是<code>umem</code>的保存形式，需要访问时再通过<code>xsk_umem__get_data</code>获取真正的<code>umem</code>地址。</p>
+<h3 id="XSK"><a href="#XSK" class="headerlink" title="XSK"></a>XSK</h3><p><code>umem</code>初始化完成后，就接着调用<code>xsk_socket__create</code>创建<code>xsk</code>，所有<code>xsk_socket__</code>开头的代码，均为<code>libbpf</code>的封装，声明在<code>xsk.h</code>。使用<code>libbpf</code>封装的API大大减少了<code>XDP</code>/<code>eBPF</code>编码的复杂度。</p>
+<p>从这个函数可以看出，和<code>AF_PACKET</code>只创建一个socket不同，对<code>AF_XDP</code>而言，每一个收包队列初始化流程中（实际是收发包队列共用）都会创建一个<code>xsk</code>，并且这里需要传入queue id，和<code>AF_PACKET</code>不同，这个queue id对应具体的硬件队列id，这里指定queue id应该就是将具体的<code>XDP</code>/<code>eBPF</code>程序attach到对应队列上的意思。</p>
+<p>同时作为参数传入的不仅有rxq，也有rxq，说明收发包队列使用的是同一个xsk，并且同时初始化。</p>
+<h2 id="TX-queue-setup"><a href="#TX-queue-setup" class="headerlink" title="TX queue setup"></a>TX queue setup</h2><p>发包队列的初始化非常简单，在上面也说了，收发包队列共用umem和xsk，在收包队列初始化时，已经完成了初始化，所以发包队列的初始化没有任何动作：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">eth_tx_queue_setup</span><span class="params">(struct rte_eth_dev *dev,</span></span></span><br><span class="line"><span class="params"><span class="function">		   <span class="keyword">uint16_t</span> tx_queue_id,</span></span></span><br><span class="line"><span class="params"><span class="function">		   <span class="keyword">uint16_t</span> nb_tx_desc __rte_unused,</span></span></span><br><span class="line"><span class="params"><span class="function">		   <span class="keyword">unsigned</span> <span class="keyword">int</span> socket_id __rte_unused,</span></span></span><br><span class="line"><span class="params"><span class="function">		   <span class="keyword">const</span> struct rte_eth_txconf *tx_conf __rte_unused)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">pmd_internals</span> *<span class="title">internals</span> =</span> dev-&gt;data-&gt;dev_private;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">pkt_tx_queue</span> *<span class="title">txq</span>;</span></span><br><span class="line"></span><br><span class="line">	txq = &amp;internals-&gt;tx_queues[tx_queue_id];</span><br><span class="line"></span><br><span class="line">	dev-&gt;data-&gt;tx_queues[tx_queue_id] = txq;</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Queue-change"><a href="#Queue-change" class="headerlink" title="Queue change?"></a>Queue change?</h2><p>从<code>xsk</code>的初始化流程可以看到，每个<code>xsk</code>对应了一个网卡的硬件队列，那么当<code>XDP</code>程序已经attach到对应网卡队列后，再调整网卡队列数，会发生什么呢？</p>
+<p>以<code>ethtool</code>调整队列数的代码<code>ethtool_set_channels</code>为例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> noinline_for_stack <span class="keyword">int</span> <span class="title">ethtool_set_channels</span><span class="params">(struct net_device *dev,</span></span></span><br><span class="line"><span class="params"><span class="function">						   <span class="keyword">void</span> __user *useraddr)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="comment">/* Disabling channels, query zero-copy AF_XDP sockets */</span></span><br><span class="line">	from_channel = channels.combined_count +</span><br><span class="line">		min(channels.rx_count, channels.tx_count);</span><br><span class="line">	to_channel = curr.combined_count + max(curr.rx_count, curr.tx_count);</span><br><span class="line">	<span class="keyword">for</span> (i = from_channel; i &lt; to_channel; i++)</span><br><span class="line">		<span class="keyword">if</span> (xdp_get_umem_from_qid(dev, i))</span><br><span class="line">			<span class="keyword">return</span> -EINVAL;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> dev-&gt;ethtool_ops-&gt;set_channels(dev, &amp;channels);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到针对待调整的队列，调用了<code>xdp_get_umem_from_qid</code>进行检查：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">struct xdp_umem *<span class="title">xdp_get_umem_from_qid</span><span class="params">(struct net_device *dev,</span></span></span><br><span class="line"><span class="params"><span class="function">				       u16 queue_id)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">if</span> (queue_id &lt; dev-&gt;real_num_rx_queues)</span><br><span class="line">		<span class="keyword">return</span> dev-&gt;_rx[queue_id].umem;</span><br><span class="line">	<span class="keyword">if</span> (queue_id &lt; dev-&gt;real_num_tx_queues)</span><br><span class="line">		<span class="keyword">return</span> dev-&gt;_tx[queue_id].umem;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(xdp_get_umem_from_qid);</span><br></pre></td></tr></table></figure>
+
+<p>可以看到上述前置检查中，如果队列上有对应的<code>umem</code>则返回<code>-EINVAL</code>，即如果网卡队列已经attach了<code>XDP</code>程序，则不允许禁用当前队列。</p>
+<p><code>AF_XDP</code>的应用场景和<code>AF_PACKET</code>相似，都是在内核驱动正常使用的前提下，在用户态捕获网卡报文的机制，在概念理解的很多时候会进行类比，其中队列这一块就是一个明显差异了，<code>AF_XDP</code>的队列就是网卡的硬件队列，而<code>AF_PACKET</code>的队列是其自身的抽象软件队列，和网卡硬件队列并不是一一对应的关系。</p>
+<h2 id="XDP-mode"><a href="#XDP-mode" class="headerlink" title="XDP mode"></a>XDP mode</h2><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> XDP_FLAGS_SKB_MODE		(1U &lt;&lt; 1)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> XDP_FLAGS_DRV_MODE		(1U &lt;&lt; 2)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> XDP_FLAGS_HW_MODE		(1U &lt;&lt; 3)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> XDP_FLAGS_MODES			(XDP_FLAGS_SKB_MODE | \</span></span><br><span class="line"><span class="meta">					 XDP_FLAGS_DRV_MODE | \</span></span><br><span class="line"><span class="meta">					 XDP_FLAGS_HW_MODE)</span></span><br></pre></td></tr></table></figure>
+
+<p><code>XDP</code>支持三种模式，分别对应了不同位置的<code>eBPF</code> hook点，自底向上分别为：<code>XDP_HW</code>、<code>XDP_DRV</code>和<code>XDP_SKB</code>。</p>
+<p>在<code>AF_XDP</code>初始化时，通过<code>xsk_socket__create</code>-&gt;<code>xsk_setup_xdp_prog</code>-&gt;<code>xsk_load_xdp_prog</code>-&gt;<code>bpf_set_link_xdp_fd</code>-&gt;<code>rtnl_setlink</code>-&gt;<code>do_setlink</code>-&gt;<code>dev_change_xdp_fd</code>设置<code>XDP mode</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> *	dev_change_xdp_fd - set or clear a bpf program for a device rx path</span></span><br><span class="line"><span class="comment"> *	@dev: device</span></span><br><span class="line"><span class="comment"> *	@extack: netlink extended ack</span></span><br><span class="line"><span class="comment"> *	@fd: new program fd or negative value to clear</span></span><br><span class="line"><span class="comment"> *	@flags: xdp-related flags</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> *	Set or clear a bpf program for a device</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">dev_change_xdp_fd</span><span class="params">(struct net_device *dev, struct netlink_ext_ack *extack,</span></span></span><br><span class="line"><span class="params"><span class="function">		      <span class="keyword">int</span> fd, u32 flags)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">net_device_ops</span> *<span class="title">ops</span> =</span> dev-&gt;netdev_ops;</span><br><span class="line">	<span class="class"><span class="keyword">enum</span> <span class="title">bpf_netdev_command</span> <span class="title">query</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bpf_prog</span> *<span class="title">prog</span> =</span> <span class="literal">NULL</span>;</span><br><span class="line">	<span class="keyword">bpf_op_t</span> bpf_op, bpf_chk;</span><br><span class="line">	<span class="keyword">bool</span> offload;</span><br><span class="line">	<span class="keyword">int</span> err;</span><br><span class="line"></span><br><span class="line">	ASSERT_RTNL();</span><br><span class="line"></span><br><span class="line">	rh_mark_used_feature(<span class="string">&quot;eBPF/xdp&quot;</span>);</span><br><span class="line"></span><br><span class="line">	offload = flags &amp; XDP_FLAGS_HW_MODE;</span><br><span class="line">	query = offload ? XDP_QUERY_PROG_HW : XDP_QUERY_PROG;</span><br><span class="line"></span><br><span class="line">	bpf_op = bpf_chk = ops-&gt;ndo_bpf;</span><br><span class="line">	<span class="keyword">if</span> (!bpf_op &amp;&amp; (flags &amp; (XDP_FLAGS_DRV_MODE | XDP_FLAGS_HW_MODE))) &#123;</span><br><span class="line">		NL_SET_ERR_MSG(extack, <span class="string">&quot;underlying driver does not support XDP in native mode&quot;</span>);</span><br><span class="line">		<span class="keyword">return</span> -EOPNOTSUPP;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">if</span> (!bpf_op || (flags &amp; XDP_FLAGS_SKB_MODE))</span><br><span class="line">		bpf_op = generic_xdp_install;</span><br><span class="line">	<span class="keyword">if</span> (bpf_op == bpf_chk)</span><br><span class="line">		bpf_chk = generic_xdp_install;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (fd &gt;= <span class="number">0</span>) &#123;</span><br><span class="line">		<span class="keyword">if</span> (!offload &amp;&amp; __dev_xdp_query(dev, bpf_chk, XDP_QUERY_PROG)) &#123;</span><br><span class="line">			NL_SET_ERR_MSG(extack, <span class="string">&quot;native and generic XDP can&#x27;t be active at the same time&quot;</span>);</span><br><span class="line">			<span class="keyword">return</span> -EEXIST;</span><br><span class="line">		&#125;</span><br><span class="line">		<span class="keyword">if</span> ((flags &amp; XDP_FLAGS_UPDATE_IF_NOEXIST) &amp;&amp;</span><br><span class="line">		    __dev_xdp_query(dev, bpf_op, query)) &#123;</span><br><span class="line">			NL_SET_ERR_MSG(extack, <span class="string">&quot;XDP program already attached&quot;</span>);</span><br><span class="line">			<span class="keyword">return</span> -EBUSY;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		prog = bpf_prog_get_type_dev(fd, BPF_PROG_TYPE_XDP,</span><br><span class="line">					     bpf_op == ops-&gt;ndo_bpf);</span><br><span class="line">		<span class="keyword">if</span> (IS_ERR(prog))</span><br><span class="line">			<span class="keyword">return</span> PTR_ERR(prog);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (!offload &amp;&amp; bpf_prog_is_dev_bound(prog-&gt;aux)) &#123;</span><br><span class="line">			NL_SET_ERR_MSG(extack, <span class="string">&quot;using device-bound program without HW_MODE flag is not supported&quot;</span>);</span><br><span class="line">			bpf_prog_put(prog);</span><br><span class="line">			<span class="keyword">return</span> -EINVAL;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	err = dev_xdp_install(dev, bpf_op, extack, flags, prog);</span><br><span class="line">	<span class="keyword">if</span> (err &lt; <span class="number">0</span> &amp;&amp; prog)</span><br><span class="line">		bpf_prog_put(prog);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> err;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果调用<code>xsk_socket__create</code>时<code>usr_config</code>没有指定<code>xdp_flags</code>的话，默认为<code>0</code>。</p>
+<p>可以看到，优先通过<code>dev-&gt;netdev_ops-&gt;ndo_bpf</code>判断对应的设备是否支持<code>XDP_HW</code>或<code>XDP_DRV</code>，对<code>bpf_op</code>赋值后通过<code>dev_xdp_install</code>调用。</p>
+<p>所以，对于<code>XDP_SKB</code>模式而言，<code>bpf_op</code>对应的函数为<code>generic_xdp_install</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">generic_xdp_install</span><span class="params">(struct net_device *dev, struct netdev_bpf *xdp)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bpf_prog</span> *<span class="title">old</span> =</span> rtnl_dereference(dev-&gt;xdp_prog);</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bpf_prog</span> *<span class="title">new</span> =</span> xdp-&gt;prog;</span><br><span class="line">	<span class="keyword">int</span> ret = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">switch</span> (xdp-&gt;command) &#123;</span><br><span class="line">	<span class="keyword">case</span> XDP_SETUP_PROG:</span><br><span class="line">		rcu_assign_pointer(dev-&gt;xdp_prog, <span class="keyword">new</span>);</span><br><span class="line">		<span class="keyword">if</span> (old)</span><br><span class="line">			bpf_prog_put(old);</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (old &amp;&amp; !<span class="keyword">new</span>) &#123;</span><br><span class="line">			static_branch_dec(&amp;generic_xdp_needed_key);</span><br><span class="line">		&#125; <span class="keyword">else</span> <span class="keyword">if</span> (<span class="keyword">new</span> &amp;&amp; !old) &#123;</span><br><span class="line">			static_branch_inc(&amp;generic_xdp_needed_key);</span><br><span class="line">			dev_disable_lro(dev);</span><br><span class="line">			dev_disable_gro_hw(dev);</span><br><span class="line">		&#125;</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">case</span> XDP_QUERY_PROG:</span><br><span class="line">		xdp-&gt;prog_id = old ? old-&gt;aux-&gt;id : <span class="number">0</span>;</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">default</span>:</span><br><span class="line">		ret = -EINVAL;</span><br><span class="line">		<span class="keyword">break</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到逻辑非常简单，就是设置<code>dev-&gt;xdp_prog</code>，调整<code>generic_xdp_needed_key</code>，如果是初始化的话，再关闭设备的<code>lro</code>和<code>gro</code>。</p>
+<p>对<code>PMD_AF_XDP</code>而言，只置位了<code>XDP_FLAGS_UPDATE_IF_NOEXIST</code>，所以和默认行为一样，按照优先顺序使用<code>XDP_HW</code>、<code>XDP_DRV</code>和<code>XDP_SKB</code>。</p>
+<h2 id="Where-is-the-XDP-eBPF-program"><a href="#Where-is-the-XDP-eBPF-program" class="headerlink" title="Where is the XDP/eBPF program?"></a>Where is the XDP/eBPF program?</h2><p>至此，<code>PMD_AF_XDP</code>的初始化流程已经结束，上面也分析过了，<code>configure</code>和<code>start</code>中都没有复杂操作，<code>start</code>完成后，PMD就可以正常工作进行收发包了。那么问题来了，<code>XDP</code>/<code>eBPF</code>程序是在哪里被attach上去的呢？这里从<code>xsk_socket__create</code>看起：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br><span class="line">88</span><br><span class="line">89</span><br><span class="line">90</span><br><span class="line">91</span><br><span class="line">92</span><br><span class="line">93</span><br><span class="line">94</span><br><span class="line">95</span><br><span class="line">96</span><br><span class="line">97</span><br><span class="line">98</span><br><span class="line">99</span><br><span class="line">100</span><br><span class="line">101</span><br><span class="line">102</span><br><span class="line">103</span><br><span class="line">104</span><br><span class="line">105</span><br><span class="line">106</span><br><span class="line">107</span><br><span class="line">108</span><br><span class="line">109</span><br><span class="line">110</span><br><span class="line">111</span><br><span class="line">112</span><br><span class="line">113</span><br><span class="line">114</span><br><span class="line">115</span><br><span class="line">116</span><br><span class="line">117</span><br><span class="line">118</span><br><span class="line">119</span><br><span class="line">120</span><br><span class="line">121</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">xsk_socket__create</span><span class="params">(struct xsk_socket **xsk_ptr, <span class="keyword">const</span> <span class="keyword">char</span> *ifname,</span></span></span><br><span class="line"><span class="params"><span class="function">		       __u32 queue_id, struct xsk_umem *umem,</span></span></span><br><span class="line"><span class="params"><span class="function">		       struct xsk_ring_cons *rx, struct xsk_ring_prod *tx,</span></span></span><br><span class="line"><span class="params"><span class="function">		       <span class="keyword">const</span> struct xsk_socket_config *usr_config)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (!(xsk-&gt;config.libbpf_flags &amp; XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD)) &#123;</span><br><span class="line">		err = xsk_setup_xdp_prog(xsk);</span><br><span class="line">		<span class="keyword">if</span> (err)</span><br><span class="line">			<span class="keyword">goto</span> out_mmap_tx;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">xsk_setup_xdp_prog</span><span class="params">(struct xsk_socket *xsk)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (!prog_id) &#123;</span><br><span class="line">		err = xsk_create_bpf_maps(xsk);</span><br><span class="line">		<span class="keyword">if</span> (err)</span><br><span class="line">			<span class="keyword">return</span> err;</span><br><span class="line"></span><br><span class="line">		err = xsk_load_xdp_prog(xsk);</span><br><span class="line">		<span class="keyword">if</span> (err) &#123;</span><br><span class="line">			xsk_delete_bpf_maps(xsk);</span><br><span class="line">			<span class="keyword">return</span> err;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		xsk-&gt;prog_fd = bpf_prog_get_fd_by_id(prog_id);</span><br><span class="line">		<span class="keyword">if</span> (xsk-&gt;prog_fd &lt; <span class="number">0</span>)</span><br><span class="line">			<span class="keyword">return</span> -errno;</span><br><span class="line">		err = xsk_lookup_bpf_maps(xsk);</span><br><span class="line">		<span class="keyword">if</span> (err) &#123;</span><br><span class="line">			close(xsk-&gt;prog_fd);</span><br><span class="line">			<span class="keyword">return</span> err;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line">.....</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">xsk_load_xdp_prog</span><span class="params">(struct xsk_socket *xsk)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">static</span> <span class="keyword">const</span> <span class="keyword">int</span> log_buf_size = <span class="number">16</span> * <span class="number">1024</span>;</span><br><span class="line">	<span class="keyword">char</span> log_buf[log_buf_size];</span><br><span class="line">	<span class="keyword">int</span> err, prog_fd;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* This is the C-program:</span></span><br><span class="line"><span class="comment">	 * SEC(&quot;xdp_sock&quot;) int xdp_sock_prog(struct xdp_md *ctx)</span></span><br><span class="line"><span class="comment">	 * &#123;</span></span><br><span class="line"><span class="comment">	 *     int ret, index = ctx-&gt;rx_queue_index;</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *     // A set entry here means that the correspnding queue_id</span></span><br><span class="line"><span class="comment">	 *     // has an active AF_XDP socket bound to it.</span></span><br><span class="line"><span class="comment">	 *     ret = bpf_redirect_map(&amp;xsks_map, index, XDP_PASS);</span></span><br><span class="line"><span class="comment">	 *     if (ret &gt; 0)</span></span><br><span class="line"><span class="comment">	 *         return ret;</span></span><br><span class="line"><span class="comment">	 *</span></span><br><span class="line"><span class="comment">	 *     // Fallback for pre-5.3 kernels, not supporting default</span></span><br><span class="line"><span class="comment">	 *     // action in the flags parameter.</span></span><br><span class="line"><span class="comment">	 *     if (bpf_map_lookup_elem(&amp;xsks_map, &amp;index))</span></span><br><span class="line"><span class="comment">	 *         return bpf_redirect_map(&amp;xsks_map, index, 0);</span></span><br><span class="line"><span class="comment">	 *     return XDP_PASS;</span></span><br><span class="line"><span class="comment">	 * &#125;</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">bpf_insn</span> <span class="title">prog</span>[] =</span> &#123;</span><br><span class="line">		<span class="comment">/* r2 = *(u32 *)(r1 + 16) */</span></span><br><span class="line">		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, <span class="number">16</span>),</span><br><span class="line">		<span class="comment">/* *(u32 *)(r10 - 4) = r2 */</span></span><br><span class="line">		BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_2, <span class="number">-4</span>),</span><br><span class="line">		<span class="comment">/* r1 = xskmap[] */</span></span><br><span class="line">		BPF_LD_MAP_FD(BPF_REG_1, xsk-&gt;xsks_map_fd),</span><br><span class="line">		<span class="comment">/* r3 = XDP_PASS */</span></span><br><span class="line">		BPF_MOV64_IMM(BPF_REG_3, <span class="number">2</span>),</span><br><span class="line">		<span class="comment">/* call bpf_redirect_map */</span></span><br><span class="line">		BPF_EMIT_CALL(BPF_FUNC_redirect_map),</span><br><span class="line">		<span class="comment">/* if w0 != 0 goto pc+13 */</span></span><br><span class="line">		BPF_JMP32_IMM(BPF_JSGT, BPF_REG_0, <span class="number">0</span>, <span class="number">13</span>),</span><br><span class="line">		<span class="comment">/* r2 = r10 */</span></span><br><span class="line">		BPF_MOV64_REG(BPF_REG_2, BPF_REG_10),</span><br><span class="line">		<span class="comment">/* r2 += -4 */</span></span><br><span class="line">		BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, <span class="number">-4</span>),</span><br><span class="line">		<span class="comment">/* r1 = xskmap[] */</span></span><br><span class="line">		BPF_LD_MAP_FD(BPF_REG_1, xsk-&gt;xsks_map_fd),</span><br><span class="line">		<span class="comment">/* call bpf_map_lookup_elem */</span></span><br><span class="line">		BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),</span><br><span class="line">		<span class="comment">/* r1 = r0 */</span></span><br><span class="line">		BPF_MOV64_REG(BPF_REG_1, BPF_REG_0),</span><br><span class="line">		<span class="comment">/* r0 = XDP_PASS */</span></span><br><span class="line">		BPF_MOV64_IMM(BPF_REG_0, <span class="number">2</span>),</span><br><span class="line">		<span class="comment">/* if r1 == 0 goto pc+5 */</span></span><br><span class="line">		BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, <span class="number">0</span>, <span class="number">5</span>),</span><br><span class="line">		<span class="comment">/* r2 = *(u32 *)(r10 - 4) */</span></span><br><span class="line">		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_10, <span class="number">-4</span>),</span><br><span class="line">		<span class="comment">/* r1 = xskmap[] */</span></span><br><span class="line">		BPF_LD_MAP_FD(BPF_REG_1, xsk-&gt;xsks_map_fd),</span><br><span class="line">		<span class="comment">/* r3 = 0 */</span></span><br><span class="line">		BPF_MOV64_IMM(BPF_REG_3, <span class="number">0</span>),</span><br><span class="line">		<span class="comment">/* call bpf_redirect_map */</span></span><br><span class="line">		BPF_EMIT_CALL(BPF_FUNC_redirect_map),</span><br><span class="line">		<span class="comment">/* The jumps are to this instruction */</span></span><br><span class="line">		BPF_EXIT_INSN(),</span><br><span class="line">	&#125;;</span><br><span class="line">	<span class="keyword">size_t</span> insns_cnt = <span class="keyword">sizeof</span>(prog) / <span class="keyword">sizeof</span>(struct bpf_insn);</span><br><span class="line"></span><br><span class="line">	prog_fd = bpf_load_program(BPF_PROG_TYPE_XDP, prog, insns_cnt,</span><br><span class="line">				   <span class="string">&quot;LGPL-2.1 or BSD-2-Clause&quot;</span>, <span class="number">0</span>, log_buf,</span><br><span class="line">				   log_buf_size);</span><br><span class="line">	<span class="keyword">if</span> (prog_fd &lt; <span class="number">0</span>) &#123;</span><br><span class="line">		pr_warn(<span class="string">&quot;BPF log buffer:\n%s&quot;</span>, log_buf);</span><br><span class="line">		<span class="keyword">return</span> prog_fd;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	err = bpf_set_link_xdp_fd(xsk-&gt;ifindex, prog_fd, xsk-&gt;config.xdp_flags);</span><br><span class="line">	<span class="keyword">if</span> (err) &#123;</span><br><span class="line">		close(prog_fd);</span><br><span class="line">		<span class="keyword">return</span> err;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	xsk-&gt;prog_fd = prog_fd;</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到是通过调用链<code>xsk_socket__create</code>-&gt;<code>xsk_setup_xdp_prog</code>-&gt;<code>xsk_load_xdp_prog</code>-&gt;<code>bpf_load_program</code>完成的，其中对应的<code>eBPF</code>程序直接硬编码到了<code>xsk_load_xdp_prog</code>中，当然也是由于<code>AF_XDP</code>的功能比较简单，如果是其他功能的<code>XDP</code>/<code>eBPF</code>程序，则会采用其他方式保存源码。</p>
+<p>注意<code>xsk_setup_xdp_prog</code>中根据<code>prog_id</code>是否合法，有不同的处理逻辑：</p>
+<ul>
+<li>当前设备上未attach <code>XDP</code>程序：函数将创建<code>BPF_MAP</code>并进行<code>XDP</code>程序的attach</li>
+<li>当前设备上已attach <code>XDP</code>程序：函数查找设备对应的<code>XDP</code>程序id以及对应的<code>BPF_MAP</code>，将其赋值给<code>xsk</code>相应成员</li>
+</ul>
+<p>由此可见，<code>XDP</code>程序和<code>BPF_MAP</code>是设备级别的，同一个设备只能有一个<code>XDP</code>程序（不支持<code>XDP_ATTACHED_MULTI</code>的场景）和<code>BPF_MAP</code>。这点在<code>net_device</code>的定义中也有体现：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">net_device</span> &#123;</span></span><br><span class="line">......</span><br><span class="line">    <span class="comment">/* RHEL: while xdp_prog is explicitly removed from the kABI</span></span><br><span class="line"><span class="comment">	 * whitelist, one semantics must be preserved: comparison of</span></span><br><span class="line"><span class="comment">	 * xdp_prog to NULL denotes whether a XDP program is loaded or not.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	RH_KABI_EXCLUDE(struct bpf_prog __rcu	*xdp_prog)</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>xdp_prog</code>只是一个指针，并非一个数组。</p>
+<h2 id="RX-amp-TX"><a href="#RX-amp-TX" class="headerlink" title="RX &amp; TX"></a>RX &amp; TX</h2><p>报文收发是PMD的核心功能，接下来看下收发是怎么实现的。之前已经提到了，内核态<code>XDP</code>和用户态应用之间通过<code>umem</code>进行报文收发，那具体是怎么做的呢？</p>
+<h3 id="XDP-ring"><a href="#XDP-ring" class="headerlink" title="XDP ring"></a>XDP ring</h3><blockquote>
+<p>The UMEM consists of a number of equally sized chunks. A descriptor in one of the rings references a frame by referencing its addr. The addr is simply an offset within the entire UMEM region. The user space allocates memory for this UMEM using whatever means it feels is most appropriate (malloc, mmap, huge pages, etc). This memory area is then registered with the kernel using the new setsockopt XDP_UMEM_REG. The UMEM also has two rings: the FILL ring and the COMPLETION ring. The FILL ring is used by the application to send down addr for the kernel to fill in with RX packet data. References to these frames will then appear in the RX ring once each packet has been received. The COMPLETION ring, on the other hand, contains frame addr that the kernel has transmitted completely and can now be used again by user space, for either TX or RX. Thus, the frame addrs appearing in the COMPLETION ring are addrs that were previously transmitted using the TX ring. In summary, the RX and FILL rings are used for the RX path and the TX and COMPLETION rings are used for the TX path.</p>
+</blockquote>
+<p>实际上，除了<code>umem</code>外，报文收发还用到了4种不同的数据结构，分别为：</p>
+<ul>
+<li><code>fill ring</code>：每一个<code>umem</code>只有一个，用于向内核提供<code>umem</code>。</li>
+<li><code>completion ring</code>：每一个<code>umem</code>只有一个，用于从内核获取<code>umem</code>。</li>
+<li><code>rx ring</code>：用户态应用从<code>rx ring</code>收取报文，每个<code>xsk</code>可以有多个<code>rx ring</code>，应该是对应<code>XDP_SHARED_UMEM </code>的场景。</li>
+<li><code>tx ring</code>：用户态应用向<code>tx ring</code>发送报文，每个<code>xsk</code>可以有多个<code>tx ring</code>，应该是对应<code>XDP_SHARED_UMEM </code>的场景。</li>
+</ul>
+<h3 id="RX-procedure"><a href="#RX-procedure" class="headerlink" title="RX procedure"></a>RX procedure</h3><p>收包流程使用<code>fill ring</code>和<code>rx ring</code>，用户态应用首先需要向内核提供<code>umem</code>用于接收报文，所以先作为producer向<code>fill ring</code>填入<code>umem</code>，内核<code>XDP</code>作为consumer从<code>fill ring</code>获取到可用<code>umem</code>后将报文填入，再作为producer将这部分<code>umem</code>添加到<code>rx ring</code>，最后用户态应用作为consumer从<code>rx ring</code>获取接收到的报文。</p>
+<p>在<code>xsk</code>初始化流程中就已经对初始化好的<code>fill ring</code>填入<code>umem</code>了，这样当<code>XDP</code>/<code>eBPF</code>attach完成后就可以立即用这部分<code>umem</code>收包了：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> ETH_AF_XDP_DFLT_NUM_DESCS	XSK_RING_CONS__DEFAULT_NUM_DESCS</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">xsk_configure</span><span class="params">(struct pmd_internals *internals, struct pkt_rx_queue *rxq,</span></span></span><br><span class="line"><span class="params"><span class="function">	      <span class="keyword">int</span> ring_size)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">int</span> reserve_size = ETH_AF_XDP_DFLT_NUM_DESCS / <span class="number">2</span>;</span><br><span class="line"></span><br><span class="line">......</span><br><span class="line">	ret = reserve_fill_queue(rxq-&gt;umem, reserve_size, fq_bufs);</span><br><span class="line">	<span class="keyword">if</span> (ret) &#123;</span><br><span class="line">		xsk_socket__delete(rxq-&gt;xsk);</span><br><span class="line">		AF_XDP_LOG(ERR, <span class="string">&quot;Failed to reserve fill queue.\n&quot;</span>);</span><br><span class="line">		<span class="keyword">goto</span> err;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>注意这里预留的个数实际上是<code>XSK_RING_CONS__DEFAULT_NUM_DESCS / 2</code>，默认情况下<code>ETH_AF_XDP_NUM_BUFFERS = XSK_RING_CONS__DEFAULT_NUM_DESCS * 2 </code>，即这里初始化了<code>umem</code>总量的四分之一，填入了<code>fill ring</code>。</p>
+<p>以<code>af_xdp_rx_cp</code>为例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">uint16_t</span></span></span><br><span class="line"><span class="function"><span class="title">af_xdp_rx_cp</span><span class="params">(<span class="keyword">void</span> *<span class="built_in">queue</span>, struct rte_mbuf **bufs, <span class="keyword">uint16_t</span> nb_pkts)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">    <span class="comment">/* Step 1: Get recv num. */</span></span><br><span class="line">	rcvd = xsk_ring_cons__peek(rx, nb_pkts, &amp;idx_rx);</span><br><span class="line">	<span class="keyword">if</span> (rcvd == <span class="number">0</span>) &#123;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">if</span> defined(XDP_USE_NEED_WAKEUP)</span></span><br><span class="line">		<span class="keyword">if</span> (xsk_ring_prod__needs_wakeup(fq))</span><br><span class="line">			(<span class="keyword">void</span>)poll(rxq-&gt;fds, <span class="number">1</span>, <span class="number">1000</span>);</span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">		<span class="keyword">goto</span> out;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* Step 2: Reserve some umem to fill ring if necessary. */</span></span><br><span class="line">	<span class="keyword">if</span> (xsk_prod_nb_free(fq, free_thresh) &gt;= free_thresh)</span><br><span class="line">		(<span class="keyword">void</span>)reserve_fill_queue(umem, ETH_AF_XDP_RX_BATCH_SIZE, <span class="literal">NULL</span>);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; rcvd; i++) &#123;</span><br><span class="line">		<span class="keyword">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">xdp_desc</span> *<span class="title">desc</span>;</span></span><br><span class="line">		<span class="keyword">uint64_t</span> addr;</span><br><span class="line">		<span class="keyword">uint32_t</span> len;</span><br><span class="line">		<span class="keyword">void</span> *pkt;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/* Step 3: Recieve every packets from rx ring. */</span></span><br><span class="line">		desc = xsk_ring_cons__rx_desc(rx, idx_rx++);</span><br><span class="line">		addr = desc-&gt;addr;</span><br><span class="line">		len = desc-&gt;len;</span><br><span class="line">		pkt = xsk_umem__get_data(rxq-&gt;umem-&gt;mz-&gt;addr, addr);</span><br><span class="line"></span><br><span class="line">		rte_memcpy(rte_pktmbuf_mtod(mbufs[i], <span class="keyword">void</span> *), pkt, len);</span><br><span class="line">        <span class="comment">/* Step 4: Enqueue addr to buf_ring after packet recieved. */</span></span><br><span class="line">		rte_ring_enqueue(umem-&gt;buf_ring, (<span class="keyword">void</span> *)addr);</span><br><span class="line">		rte_pktmbuf_pkt_len(mbufs[i]) = len;</span><br><span class="line">		rte_pktmbuf_data_len(mbufs[i]) = len;</span><br><span class="line">		rx_bytes += len;</span><br><span class="line">		bufs[i] = mbufs[i];</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* Step 5: Update rx ring consumer index. */</span></span><br><span class="line">	xsk_ring_cons__release(rx, rcvd);</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>收包流程中各步骤如下：</p>
+<ul>
+<li>Step 1：依据<code>rx ring</code>的producer和consumer差值，获取当前可收取的报文数量。</li>
+<li>Step 2：如果<code>fill ring</code>中剩余<code>umem</code>小于阈值的话，则添加一部分进去。</li>
+<li>Step 3：从<code>rx ring</code>获取报文对应的<code>umem</code>并拷贝到<code>mbuf</code>完成每个报文的收取。</li>
+<li>Step 4：每个<code>umem</code>处理完后入队<code>buf_ring</code>供下次收包/发包使用。</li>
+<li>Step 5：更新<code>rx ring</code>中的consumer。</li>
+</ul>
+<h3 id="TX-procedure"><a href="#TX-procedure" class="headerlink" title="TX procedure"></a>TX procedure</h3><p>看完收包流程后，我原以为以为内核<code>XDP</code>要相对地提前初始化一部分<code>umem</code>，然后用户态向对应<code>umem</code>填入报文完成发包，但事实上不是这样的。</p>
+<p>发包流程中，使用<code>completion ring</code>和<code>tx ring</code>，用户态应用首先将报文填入<code>umem</code>，并作为producer将<code>umem</code>填入<code>tx ring</code>，内核<code>XDP</code>作为consumer从<code>tx ring</code>获取报文并发送。发送完成后，作为producer将发送完成的<code>umem</code>填入<code>completion ring</code>，用户态应用再作为consumer从<code>completion ring</code>中回收已经发送完毕的<code>umem</code>供下一次发包/收包使用。</p>
+<p>以<code>af_xdp_tx_cp</code>为例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">uint16_t</span></span></span><br><span class="line"><span class="function"><span class="title">af_xdp_tx_cp</span><span class="params">(<span class="keyword">void</span> *<span class="built_in">queue</span>, struct rte_mbuf **bufs, <span class="keyword">uint16_t</span> nb_pkts)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="comment">/* Step 1: Get free umem in completion ring and enqueue to buf_ring. */</span></span><br><span class="line">	pull_umem_cq(umem, nb_pkts);</span><br><span class="line"></span><br><span class="line">	nb_pkts = rte_ring_dequeue_bulk(umem-&gt;buf_ring, addrs,</span><br><span class="line">					nb_pkts, <span class="literal">NULL</span>);</span><br><span class="line">	<span class="keyword">if</span> (nb_pkts == <span class="number">0</span>)</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* Step 2: Reserve tx ring. */</span></span><br><span class="line">	<span class="keyword">if</span> (xsk_ring_prod__reserve(&amp;txq-&gt;tx, nb_pkts, &amp;idx_tx) != nb_pkts) &#123;</span><br><span class="line">		kick_tx(txq);</span><br><span class="line">		rte_ring_enqueue_bulk(umem-&gt;buf_ring, addrs, nb_pkts, <span class="literal">NULL</span>);</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; nb_pkts; i++) &#123;</span><br><span class="line">		<span class="class"><span class="keyword">struct</span> <span class="title">xdp_desc</span> *<span class="title">desc</span>;</span></span><br><span class="line">		<span class="keyword">void</span> *pkt;</span><br><span class="line"></span><br><span class="line">        <span class="comment">/* Step 3: Send every packet to umem from tx ring. */</span></span><br><span class="line">		desc = xsk_ring_prod__tx_desc(&amp;txq-&gt;tx, idx_tx + i);</span><br><span class="line">		mbuf = bufs[i];</span><br><span class="line">		desc-&gt;len = mbuf-&gt;pkt_len;</span><br><span class="line"></span><br><span class="line">		desc-&gt;addr = (<span class="keyword">uint64_t</span>)addrs[i];</span><br><span class="line">		pkt = xsk_umem__get_data(umem-&gt;mz-&gt;addr,</span><br><span class="line">					 desc-&gt;addr);</span><br><span class="line">		rte_memcpy(pkt, rte_pktmbuf_mtod(mbuf, <span class="keyword">void</span> *), desc-&gt;len);</span><br><span class="line">		tx_bytes += mbuf-&gt;pkt_len;</span><br><span class="line">		rte_pktmbuf_free(mbuf);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">    <span class="comment">/* Step 4: Update tx ring producer index. */</span></span><br><span class="line">	xsk_ring_prod__submit(&amp;txq-&gt;tx, nb_pkts);</span><br><span class="line"></span><br><span class="line">   	<span class="comment">/* Step 5: Kick XDP. */</span></span><br><span class="line">	kick_tx(txq);</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>发包流程中各步骤如下：</p>
+<ul>
+<li>Step 1：从<code>completion ring</code>中检查是否有已经发包完毕的<code>umem</code>，如果有，则将其入队<code>buf_ring</code>，以供下一次发包/收包使用。</li>
+<li>Step 2：检查<code>tx ring</code>空闲元素数量是否满足本次发包，如果不足的话，通过<code>kick_tx</code>的方式让内核<code>XDP</code>再发包，以释放一些可用<code>tx ring</code>，同时将上一步出队的<code>buf_ring</code>中的<code>umem</code>再入队。</li>
+<li>Step 3：将<code>mbuf</code>拷贝到<code>tx ring</code>中对应的<code>umem</code>完成发包。</li>
+<li>Step 4：更新<code>tx ring</code>的producer。</li>
+<li>Step 5：调用<code>kick_tx</code>通知内核<code>XDP</code>有报文待发送。之前提到了<code>AF_XDP</code>的发包过程还是有<code>send</code>调用的，原因就在这里，更新了<code>tx ring</code>后通过<code>send</code>通知内核。收包流程没有<code>recv</code>调用，因为收包流程是轮询的，不需要收到来自内核<code>XDP</code>的通知。</li>
+</ul>
+<p>这里的<code>kick_tx</code>实际上就是调用<code>xsk</code>对应的<code>sendmsg</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span></span></span><br><span class="line"><span class="function"><span class="title">kick_tx</span><span class="params">(struct pkt_tx_queue *txq)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">xsk_umem_info</span> *<span class="title">umem</span> =</span> txq-&gt;umem;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="meta-keyword">if</span> defined(XDP_USE_NEED_WAKEUP)</span></span><br><span class="line">	<span class="keyword">if</span> (xsk_ring_prod__needs_wakeup(&amp;txq-&gt;tx))</span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br><span class="line">		<span class="keyword">while</span> (send(xsk_socket__fd(txq-&gt;<span class="built_in">pair</span>-&gt;xsk), <span class="literal">NULL</span>,</span><br><span class="line">			    <span class="number">0</span>, MSG_DONTWAIT) &lt; <span class="number">0</span>) &#123;</span><br><span class="line">			<span class="comment">/* some thing unexpected */</span></span><br><span class="line">			<span class="keyword">if</span> (errno != EBUSY &amp;&amp; errno != EAGAIN &amp;&amp; errno != EINTR)</span><br><span class="line">				<span class="keyword">break</span>;</span><br><span class="line"></span><br><span class="line">			<span class="comment">/* pull from completion queue to leave more space */</span></span><br><span class="line">			<span class="keyword">if</span> (errno == EAGAIN)</span><br><span class="line">				pull_umem_cq(umem, ETH_AF_XDP_TX_BATCH_SIZE);</span><br><span class="line">		&#125;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">ifndef</span> XDP_UMEM_UNALIGNED_CHUNK_FLAG</span></span><br><span class="line">	pull_umem_cq(umem, ETH_AF_XDP_TX_BATCH_SIZE);</span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>而在<code>xsk</code>的代码中，以<code>xsk_generic_xmit</code>为例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">xsk_generic_xmit</span><span class="params">(struct sock *sk, struct msghdr *m,</span></span></span><br><span class="line"><span class="params"><span class="function">			    <span class="keyword">size_t</span> total_len)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">		skb = sock_alloc_send_skb(sk, len, <span class="number">1</span>, &amp;err);</span><br><span class="line">		<span class="keyword">if</span> (unlikely(!skb)) &#123;</span><br><span class="line">			err = -EAGAIN;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		skb_put(skb, len);</span><br><span class="line">		addr = desc.addr;</span><br><span class="line">		buffer = xdp_umem_get_data(xs-&gt;umem, addr);</span><br><span class="line">		err = skb_store_bits(skb, <span class="number">0</span>, buffer, len);</span><br><span class="line">		<span class="keyword">if</span> (unlikely(err) || xskq_reserve_addr(xs-&gt;umem-&gt;cq)) &#123;</span><br><span class="line">			kfree_skb(skb);</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		skb-&gt;dev = xs-&gt;dev;</span><br><span class="line">		skb-&gt;priority = sk-&gt;sk_priority;</span><br><span class="line">		skb-&gt;mark = sk-&gt;sk_mark;</span><br><span class="line">		skb_shinfo(skb)-&gt;destructor_arg = (<span class="keyword">void</span> *)(<span class="keyword">long</span>)addr;</span><br><span class="line">		skb-&gt;destructor = xsk_destruct_skb;</span><br><span class="line"></span><br><span class="line">		err = dev_direct_xmit(skb, xs-&gt;queue_id);</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>其逻辑就是从<code>tx_ring</code>中获取报文，构造<code>skb</code>，再调用<code>dev_direct_xmit</code>最终通过网卡驱动的发包函数发送出去。</p>
+<p>可以看到整个发包流程，是和<code>XDP</code>程序毫无关系的，这也是为什么很多地方会说<code>XDP</code>只工作于收包路径。<code>AF_XDP</code>的发包能力是利用了<code>umem</code>实现的，<code>AF_XDP</code>将收发包功能封装整合，最终向上层提供了一种协议族。</p>
+<h3 id="Comparison-with-virtio-ring"><a href="#Comparison-with-virtio-ring" class="headerlink" title="Comparison with virtio ring"></a>Comparison with virtio ring</h3><p>ring这块的话和<code>virtio</code>还是有一定的相似性的，相同的地方在于前后端都是各通过一个ring来通知对端本端的处理进度，以及通过相对的ring来获取对端的处理进度，ring中都是存放了真实描述符（<code>umem</code>/<code>desc ring</code>）的索引。不同的地方在于<code>virtio</code>对于收发包队列，各有一个<code>desc ring</code>用来存储<code>desc</code>。<code>desc ring</code>对应到<code>XDP</code>就是<code>umem</code>，然而所有的收发包队列使用同一个<code>umem</code>。</p>
+<h2 id="eBPF-map-in-AF-XDP"><a href="#eBPF-map-in-AF-XDP" class="headerlink" title="eBPF map in AF_XDP"></a>eBPF map in AF_XDP</h2><p><code>eBPF</code>程序可以通过<code>BPF_MAP</code>和用户态程序进行运行时的数据交换。<code>BPF_MAP</code>支持的类型定义在枚举类型<code>bpf_map_type</code>中。对<code>XDP</code>而言，每一个<code>xsk</code>创建时，都会创建一个<code>BPF_MAP_TYPE_XSKMAP</code>类型的<code>BPF_MAP</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">xsk_create_bpf_maps</span><span class="params">(struct xsk_socket *xsk)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">int</span> max_queues;</span><br><span class="line">	<span class="keyword">int</span> fd;</span><br><span class="line"></span><br><span class="line">	max_queues = xsk_get_max_queues(xsk);</span><br><span class="line">	<span class="keyword">if</span> (max_queues &lt; <span class="number">0</span>)</span><br><span class="line">		<span class="keyword">return</span> max_queues;</span><br><span class="line"></span><br><span class="line">	fd = bpf_create_map_name(BPF_MAP_TYPE_XSKMAP, <span class="string">&quot;xsks_map&quot;</span>,</span><br><span class="line">				 <span class="keyword">sizeof</span>(<span class="keyword">int</span>), <span class="keyword">sizeof</span>(<span class="keyword">int</span>), max_queues, <span class="number">0</span>);</span><br><span class="line">	<span class="keyword">if</span> (fd &lt; <span class="number">0</span>)</span><br><span class="line">		<span class="keyword">return</span> fd;</span><br><span class="line"></span><br><span class="line">	xsk-&gt;xsks_map_fd = fd;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所有的<code>BPF_MAP</code>名称都固定为<code>xsks_map</code>，<code>key_size</code>和<code>value_size</code>都为<code>sizeof(int)</code>，因为这里实际逻辑上的key为<code>queue_id</code>，而value为<code>xsk-&gt;fd</code>，其数据大小都是<code>int</code>。该<code>BPF_MAP</code>的意义在于指导<code>XDP</code>程序，在key对应的queue上收到报文后，将报文重定向到value对应的<code>xsk</code>。</p>
+<p>这里要稍微说一下<code>BPF_MAP</code>的创建，<code>libbpf</code>封装的接口<code>bpf_create_map_name</code>最终使用<code>BPF_MAP_CREATE</code>系统调用来创建对应的<code>BPF_MAP</code>，从上述传参可以看到，并没有设备或<code>xsk</code>的相关信息传入，可以想到，所有的<code>BPF_MAP</code>都属于一个统一的namespace，创建使用都依据最终返回的fd进行，只要能够获取fd，就可以访问。所以<code>BPF_MAP</code>本身不和设备、<code>xsk</code>或特定资源绑定，而是由创建<code>BPF_MAP</code>的调用者保存创建后的fd以便于后续的访问和管理。对<code>AF_XDP</code>而言，保存在了<code>xsk-&gt;xsks_map_fd</code>。</p>
+<p>注意这里所有的<code>xsk</code>对应的<code>BPF_MAP</code>的名字都相同，但是每一个<code>xsk</code>唯一对应一个<code>xsks_map_fd</code>、<code>xsk-&gt;fd</code>和<code>prog_fd</code>，并且都保存在<code>xsk</code>结构体中。这里要和<code>XDP</code>程序attach的流程结合起来看，一个设备对应一个<code>XDP</code>程序和<code>BPF_MAP</code>，但一个<code>XDP</code>程序和<code>BPF_MAP</code>可能对应多个<code>xsk</code>。当对同一个设备的不同队列创建多个<code>xsk</code>时，实际上是通过在<code>BPF_MAP</code>中增加<code>queue_id</code>和<code>xsk-&gt;fd</code>的映射。</p>
+<p>对<code>AF_XDP</code>而言，在后续收包流程中执行<code>XDP</code>程序时，从<code>BPF_MAP</code>中查找到对应的<code>xsk</code>，并将报文拷贝到<code>xsk</code>对应的<code>umem</code>中。所以<code>AF_XDP</code>的<code>BPF_MAP</code>实现了<code>queue_id</code>和<code>xsk-&gt;fd</code>的映射，用于指导<code>XDP</code>程序进行重定向，而实现内核态与用户态之间进行数据交互的机制是<code>umem</code>。</p>
+<h2 id="Does-XDP-support-offload"><a href="#Does-XDP-support-offload" class="headerlink" title="Does XDP support offload?"></a>Does XDP support offload?</h2><p>内核协议栈实现了很多卸载功能，如<code>GRO</code>/<code>GSO</code>，在分片场景能极大提升性能，那<code>XDP</code>是否支持这些卸载能力呢？</p>
+<h3 id="GRO-LRO-with-XDP"><a href="#GRO-LRO-with-XDP" class="headerlink" title="GRO/LRO with XDP?"></a>GRO/LRO with XDP?</h3><p>首先看<code>GRO</code>，也就是接收方向，以hook点最晚的<code>SKB MODE</code>来说，其调用路径为：<code>napi_gro_complete</code>-&gt;<code>netif_receive_skb_internal</code>-&gt;<code>__netif_receive_skb</code>-&gt;<code>__netif_receive_skb_core</code>-&gt;<code>do_xdp_generic</code>。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> <span class="keyword">int</span> __netif_receive_skb_core(struct sk_buff *skb, <span class="keyword">bool</span> pfmemalloc)</span><br><span class="line">&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (static_branch_unlikely(&amp;generic_xdp_needed_key)) &#123;</span><br><span class="line">		<span class="keyword">int</span> ret2;</span><br><span class="line"></span><br><span class="line">		preempt_disable();</span><br><span class="line">		ret2 = do_xdp_generic(rcu_dereference(skb-&gt;dev-&gt;xdp_prog), skb);</span><br><span class="line">		preempt_enable();</span><br><span class="line"></span><br><span class="line">		<span class="keyword">if</span> (ret2 != XDP_PASS)</span><br><span class="line">			<span class="keyword">return</span> NET_RX_DROP;</span><br><span class="line">		skb_reset_mac_len(skb);</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>从调用路径可以知道，在<code>skb</code>接收的早期，<code>GRO</code>完成之前就已经执行<code>XDP</code>程序了。所以，除非<code>XDP</code>程序不对该报文进行处理，也就是<code>XDP</code>程序返回了<code>XDP_PASS</code>，报文才可能接着进入<code>GRO</code>处理流程。也就是说，<code>XDP</code>处理的报文，是未经<code>GRO</code>处理的，对<code>AF_XDP</code>而言，就意味着不支持<code>GRO</code>。</p>
+<p>那有没有可能支持<code>LRO</code>呢？毕竟<code>LRO</code>不需要进入协议栈就可以完成。假设支持<code>LRO</code>，则<code>xsk</code>就需要处理可能出现的巨帧。从上面收发包流程可以知道，报文是由<code>umem</code>承载的，而<code>umem</code>最大支持<code>PAGE_SIZE</code>的帧大小：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">xdp_umem_reg</span><span class="params">(struct xdp_umem *umem, struct xdp_umem_reg *mr)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">    <span class="keyword">if</span> (chunk_size &lt; XDP_UMEM_MIN_CHUNK_SIZE || chunk_size &gt; PAGE_SIZE) &#123;</span><br><span class="line">		<span class="comment">/* Strictly speaking we could support this, if:</span></span><br><span class="line"><span class="comment">		 * - huge pages, or*</span></span><br><span class="line"><span class="comment">		 * - using an IOMMU, or</span></span><br><span class="line"><span class="comment">		 * - making sure the memory area is consecutive</span></span><br><span class="line"><span class="comment">		 * but for now, we simply say &quot;computer says no&quot;.</span></span><br><span class="line"><span class="comment">		 */</span></span><br><span class="line">		<span class="keyword">return</span> -EINVAL;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>而普通页大小在X86架构下通常为4K，也就是通常<code>XDP</code>只支持最大4K的帧大小，这个大小不足以用于<code>LRO</code>。</p>
+<p>关于<code>LRO</code>，也可以参考下<code>virtio_net</code>中的<code>virtnet_xdp_set</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">virtnet_xdp_set</span><span class="params">(struct net_device *dev, struct bpf_prog *prog,</span></span></span><br><span class="line"><span class="params"><span class="function">			   struct netlink_ext_ack *extack)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (!virtio_has_feature(vi-&gt;vdev, VIRTIO_NET_F_CTRL_GUEST_OFFLOADS)</span><br><span class="line">	    &amp;&amp; (virtio_has_feature(vi-&gt;vdev, VIRTIO_NET_F_GUEST_TSO4) ||</span><br><span class="line">	        virtio_has_feature(vi-&gt;vdev, VIRTIO_NET_F_GUEST_TSO6) ||</span><br><span class="line">	        virtio_has_feature(vi-&gt;vdev, VIRTIO_NET_F_GUEST_ECN) ||</span><br><span class="line">		virtio_has_feature(vi-&gt;vdev, VIRTIO_NET_F_GUEST_UFO))) &#123;</span><br><span class="line">		NL_SET_ERR_MSG_MOD(extack, <span class="string">&quot;Can&#x27;t set XDP while host is implementing LRO, disable LRO first&quot;</span>);</span><br><span class="line">		<span class="keyword">return</span> -EOPNOTSUPP;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到，在<code>virtio_net</code>开启了<code>LRO</code>时，也是不支持attach的，原因也是上面提的，目前<code>XDP</code>尚不支持<code>LRO</code>，后续理论上可以支持。</p>
+<h3 id="GSO-TSO-with-XDP"><a href="#GSO-TSO-with-XDP" class="headerlink" title="GSO/TSO with XDP?"></a>GSO/TSO with XDP?</h3><p>再看发包方向<code>GSO</code>，在上面发包流程的分析中已经描述了<code>AF_XDP</code>的发包原理：直接将从<code>umem</code>获取到的原始报文，调用<code>dev_direct_xmit</code>直接通过网卡驱动的发包函数发出，所以很明显，<code>XDP</code>也不支持<code>GSO</code>。</p>
+<p>那是否支持<code>TSO</code>呢？发包流程中调用驱动的发包函数，报文是由<code>skb</code>承载的，而构造<code>skb</code>的流程中，并没有设置<code>skb-&gt;gso_size</code>等卸载相关的字段（参考<code>xsk_generic_xmit</code>），所以<code>XDP</code>目前尚不支持<code>TSO</code>，后续理论上可以支持。</p>
+<h1 id="libxdp-amp-libbpf"><a href="#libxdp-amp-libbpf" class="headerlink" title="libxdp &amp; libbpf"></a>libxdp &amp; libbpf</h1><p>上面已经介绍过<code>PMD_AF_XDP</code>使用了<code>libbpf</code><a target="_blank" rel="noopener" href="https://github.com/libbpf/libbpf">^1</a>提供的<code>xsk</code>相关接口了，但上述代码基于4.18版本的内核，在这之后<code>libbpf</code>进行了很多改动，其中包括使用一个新的库<code>libxdp</code><a target="_blank" rel="noopener" href="https://github.com/xdp-project/xdp-tools">^2</a>来维护<code>XDP</code>相关的接口。</p>
+<p><code>XDP</code>应用对不同版本的<code>libbpf</code>可以参考<code>PMD_AF_XDP</code>的处理，根据不同版本引用不同的头文件：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">ifdef</span> RTE_NET_AF_XDP_LIBXDP</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;xdp/xsk.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">else</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;bpf/xsk.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+
+
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/21/Record-of-learning-AF-XDP/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Other/" rel="tag">Other</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+    
+      <a href="/2023/01/21/Linux-kernel-checksum-calculation-and-skb-ip-summed/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">Linux kernel checksum calculation and skb-&gt;ip_summed</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>

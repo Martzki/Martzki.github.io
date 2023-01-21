@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>A multiplication overflow problem |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-A-multiplication-overflow-problem"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  A multiplication overflow problem
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/A-multiplication-overflow-problem/" class="article-date">
+  <time datetime="2023-01-21T14:08:18.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">2.2k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">11 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Preface"><a href="#Preface" class="headerlink" title="Preface"></a>Preface</h1><p>我司产品从内核ct抄了一份ip解析的代码在应用层使用，在客户跑业务的时候coredump掉了，从堆栈分析看是做乘法过程中整数溢出abort了，在这里简单记录下。</p>
+<h1 id="in4-pton"><a href="#in4-pton" class="headerlink" title="in4_pton"></a>in4_pton</h1><p>问题函数为<code>in4_pton</code>，用于将字符串ip转换成二进制ip，定义如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * in4_pton - convert an IPv4 address from literal to binary representation</span></span><br><span class="line"><span class="comment"> * @src: the start of the IPv4 address string</span></span><br><span class="line"><span class="comment"> * @srclen: the length of the string, -1 means strlen(src)</span></span><br><span class="line"><span class="comment"> * @dst: the binary (u8[4] array) representation of the IPv4 address</span></span><br><span class="line"><span class="comment"> * @delim: the delimiter of the IPv4 address in @src, -1 means no delimiter</span></span><br><span class="line"><span class="comment"> * @end: A pointer to the end of the parsed string will be placed here</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Return one on success, return zero when any error occurs</span></span><br><span class="line"><span class="comment"> * and @end will point to the end of the parsed string.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">in4_pton</span><span class="params">(<span class="keyword">const</span> <span class="keyword">char</span> *src, <span class="keyword">int</span> srclen,</span></span></span><br><span class="line"><span class="params"><span class="function">	     u8 *dst,</span></span></span><br><span class="line"><span class="params"><span class="function">	     <span class="keyword">int</span> delim, <span class="keyword">const</span> <span class="keyword">char</span> **end)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">const</span> <span class="keyword">char</span> *s;</span><br><span class="line">	u8 *d;</span><br><span class="line">	u8 dbuf[<span class="number">4</span>];</span><br><span class="line">	<span class="keyword">int</span> ret = <span class="number">0</span>;</span><br><span class="line">	<span class="keyword">int</span> i;</span><br><span class="line">	<span class="keyword">int</span> w = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (srclen &lt; <span class="number">0</span>)</span><br><span class="line">		srclen = <span class="built_in">strlen</span>(src);</span><br><span class="line">	s = src;</span><br><span class="line">	d = dbuf;</span><br><span class="line">	i = <span class="number">0</span>;</span><br><span class="line">	<span class="keyword">while</span> (<span class="number">1</span>) &#123;</span><br><span class="line">		<span class="keyword">int</span> c;</span><br><span class="line">		c = xdigit2bin(srclen &gt; <span class="number">0</span> ? *s : <span class="string">&#x27;\0&#x27;</span>, delim);</span><br><span class="line">		<span class="keyword">if</span> (!(c &amp; (IN6PTON_DIGIT | IN6PTON_DOT | IN6PTON_DELIM | IN6PTON_COLON_MASK))) &#123;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line">		<span class="keyword">if</span> (c &amp; (IN6PTON_DOT | IN6PTON_DELIM | IN6PTON_COLON_MASK)) &#123;</span><br><span class="line">			<span class="keyword">if</span> (w == <span class="number">0</span>)</span><br><span class="line">				<span class="keyword">goto</span> out;</span><br><span class="line">			*d++ = w &amp; <span class="number">0xff</span>;</span><br><span class="line">			w = <span class="number">0</span>;</span><br><span class="line">			i++;</span><br><span class="line">			<span class="keyword">if</span> (c &amp; (IN6PTON_DELIM | IN6PTON_COLON_MASK)) &#123;</span><br><span class="line">				<span class="keyword">if</span> (i != <span class="number">4</span>)</span><br><span class="line">					<span class="keyword">goto</span> out;</span><br><span class="line">				<span class="keyword">break</span>;</span><br><span class="line">			&#125;</span><br><span class="line">			<span class="keyword">goto</span> cont;</span><br><span class="line">		&#125;</span><br><span class="line">		w = (w * <span class="number">10</span>) + c; <span class="comment">/* Coredump here. */</span></span><br><span class="line">		<span class="keyword">if</span> ((w &amp; <span class="number">0xffff</span>) &gt; <span class="number">255</span>) &#123;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line">cont:</span><br><span class="line">		<span class="keyword">if</span> (i &gt;= <span class="number">4</span>)</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		s++;</span><br><span class="line">		srclen--;</span><br><span class="line">	&#125;</span><br><span class="line">	ret = <span class="number">1</span>;</span><br><span class="line">	<span class="built_in">memcpy</span>(dst, dbuf, <span class="keyword">sizeof</span>(dbuf));</span><br><span class="line">out:</span><br><span class="line">	<span class="keyword">if</span> (end)</span><br><span class="line">		*end = s;</span><br><span class="line">	<span class="keyword">return</span> ret;</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(in4_pton);</span><br></pre></td></tr></table></figure>
+
+<p>导致coredump的代码为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">w = (w * <span class="number">10</span>) + c;</span><br></pre></td></tr></table></figure>
+
+<p>coredump堆栈为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">#0  0x00007f9563a35428 in raise () from /lib/x86_64-linux-gnu/libc.so.6</span><br><span class="line">#1  0x00007f9563a3702a in abort () from /lib/x86_64-linux-gnu/libc.so.6</span><br><span class="line">#2  0x000056378c35c332 in __mulvsi3 ()</span><br><span class="line">#3  0x000056378bdcec16 in in4_pton (delim=-1, end=&lt;synthetic pointer&gt;, dst=0x7f95355e9a44 &quot;&quot;, srclen=566, </span><br><span class="line">    src=0x50005e1169ba &lt;error: Cannot access memory at address 0x50005e1169ba&gt;)</span><br></pre></td></tr></table></figure>
+
+<p>这里<code>src</code>是<code>mbuf</code>的L4数据起始地址，由于环境上没有打开大页内存的coredump，导致<code>src</code>的内容无法获取，提高了一点分析难度，不过影响也不是很大。</p>
+<p>接着分析下整体函数流程，从<code>src</code>的起始地址<code>s</code>开始读取每个字符并作相应转换，保存到<code>c</code>中，然后累加到<code>w</code>中去，等于逐位读取十进制整数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">......</span><br><span class="line">		<span class="keyword">int</span> c;</span><br><span class="line">		c = xdigit2bin(srclen &gt; <span class="number">0</span> ? *s : <span class="string">&#x27;\0&#x27;</span>, delim);</span><br><span class="line">......</span><br><span class="line">		w = (w * <span class="number">10</span>) + c; <span class="comment">/* Coredump here. */</span></span><br><span class="line">		<span class="keyword">if</span> ((w &amp; <span class="number">0xffff</span>) &gt; <span class="number">255</span>) &#123;</span><br><span class="line">			<span class="keyword">goto</span> out;</span><br><span class="line">		&#125;</span><br><span class="line">......</span><br></pre></td></tr></table></figure>
+
+<p>很明显，这一段是为了将字符形式的点分十进制的IP的数字部分转换成十进制数字并保存，这里通过累计值是否大于255判断数值是否溢出/格式是否正确。</p>
+<p>这里要注意的一点是，从<code>xdigit2bin</code>定义中可以发现，<code>c</code>的高16bit代表了<code>c</code>字符的类型，低16bit代表了对应的数值：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_XDIGIT		0x00010000</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_DIGIT		0x00020000</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_COLON_MASK	0x00700000</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_COLON_1		0x00100000	<span class="comment">/* single : requested */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_COLON_2		0x00200000	<span class="comment">/* second : requested */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_COLON_1_2	0x00400000	<span class="comment">/* :: requested */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_DOT		0x00800000	<span class="comment">/* . */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_DELIM		0x10000000</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_NULL		0x20000000	<span class="comment">/* first/tail */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IN6PTON_UNKNOWN		0x40000000</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">int</span> <span class="title">xdigit2bin</span><span class="params">(<span class="keyword">char</span> c, <span class="keyword">int</span> delim)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">int</span> val;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (c == delim || c == <span class="string">&#x27;\0&#x27;</span>)</span><br><span class="line">		<span class="keyword">return</span> IN6PTON_DELIM;</span><br><span class="line">	<span class="keyword">if</span> (c == <span class="string">&#x27;:&#x27;</span>)</span><br><span class="line">		<span class="keyword">return</span> IN6PTON_COLON_MASK;</span><br><span class="line">	<span class="keyword">if</span> (c == <span class="string">&#x27;.&#x27;</span>)</span><br><span class="line">		<span class="keyword">return</span> IN6PTON_DOT;</span><br><span class="line"></span><br><span class="line">	val = hex_to_bin(c);</span><br><span class="line">	<span class="keyword">if</span> (val &gt;= <span class="number">0</span>)</span><br><span class="line">		<span class="keyword">return</span> val | IN6PTON_XDIGIT | (val &lt; <span class="number">10</span> ? IN6PTON_DIGIT : <span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (delim == <span class="number">-1</span>)</span><br><span class="line">		<span class="keyword">return</span> IN6PTON_DELIM;</span><br><span class="line">	<span class="keyword">return</span> IN6PTON_UNKNOWN;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>也正是这一点导致了最终的溢出：如果<code>c</code>只表示数值的话，通过和<code>255</code>比较可以确保不溢出，但每个数字的高16bit都有置位，当起始字符串的以若干<code>0</code>开头时，高16bit一直被累加，而低16bit的值一直是<code>0</code>，始终小于<code>255</code>，最终整体超过了<code>int</code>的上界，结果溢出。</p>
+<h1 id="How-about-kernel"><a href="#How-about-kernel" class="headerlink" title="How about kernel?"></a>How about kernel?</h1><p>单单看溢出原因好像已经很明确了，但这段代码是从内核抄出来的，为什么内核正常运行安稳无恙呢？</p>
+<p>所以在内核上构造一下对应场景验证，函数调用顺序为：<code>nf_nat_sip</code>-&gt;<code>ct_sip_parse_request</code>-&gt;<code>skp_epaddr_len</code>-&gt;<code>epaddr_len</code>-&gt;<code>sip_parse_addr</code>-&gt;<code>in4_pton</code>。</p>
+<p>顶层调用入口<code>nf_nat_sip</code>位于内核模块<code>nf_nat_sip</code>，在模块初始化的时候被注册到<code>netfilter</code>的<code>NAT</code>模块中：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> <span class="class"><span class="keyword">struct</span> <span class="title">nf_nat_sip_hooks</span> <span class="title">sip_hooks</span> =</span> &#123;</span><br><span class="line">	.msg		= nf_nat_sip,</span><br><span class="line">	.seq_adjust	= nf_nat_sip_seq_adjust,</span><br><span class="line">	.expect		= nf_nat_sip_expect,</span><br><span class="line">	.sdp_addr	= nf_nat_sdp_addr,</span><br><span class="line">	.sdp_port	= nf_nat_sdp_port,</span><br><span class="line">	.sdp_session	= nf_nat_sdp_session,</span><br><span class="line">	.sdp_media	= nf_nat_sdp_media,</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> __init <span class="title">nf_nat_sip_init</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	BUG_ON(nf_nat_sip_hooks != <span class="literal">NULL</span>);</span><br><span class="line">	nf_nat_helper_register(&amp;nat_helper_sip);</span><br><span class="line">	RCU_INIT_POINTER(nf_nat_sip_hooks, &amp;sip_hooks);</span><br><span class="line">	nf_ct_helper_expectfn_register(&amp;sip_nat);</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以要进入这个函数，首先添加一条DNAT规则，用户态直接通过iptables操作：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># iptables -t nat -A PREROUTING -p udp -s 10.103.240.222 --dport 5060 -j DNAT --to-destination 1.2.3.4</span></span><br></pre></td></tr></table></figure>
+
+<p><code>iptable</code>指定<code>-t nat</code>选项查看添加完成后的NAT规则：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># iptables -nvL -t nat</span></span><br><span class="line">Chain PREROUTING (policy ACCEPT 18234 packets, 3134K bytes)</span><br><span class="line"> pkts bytes target     prot opt <span class="keyword">in</span>     out     <span class="built_in">source</span>               destination         </span><br><span class="line">    0     0 DNAT       udp  --  *      *       10.103.240.222       0.0.0.0/0            udp dpt:5060 to:1.2.3.4</span><br><span class="line"></span><br><span class="line">Chain INPUT (policy ACCEPT 16998 packets, 2947K bytes)</span><br><span class="line"> pkts bytes target     prot opt <span class="keyword">in</span>     out     <span class="built_in">source</span>               destination         </span><br><span class="line"></span><br><span class="line">Chain OUTPUT (policy ACCEPT 269 packets, 109K bytes)</span><br><span class="line"> pkts bytes target     prot opt <span class="keyword">in</span>     out     <span class="built_in">source</span>               destination         </span><br><span class="line"></span><br><span class="line">Chain POSTROUTING (policy ACCEPT 277 packets, 110K bytes)</span><br><span class="line"> pkts bytes target     prot opt <span class="keyword">in</span>     out     <span class="built_in">source</span>               destination</span><br></pre></td></tr></table></figure>
+
+<p>加载<code>nf_nat_sip</code>模块，打开内核报文转发以及<code>netfilter</code>对应的<code>helper</code>功能：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># modprobe nf_nat_sip</span></span><br><span class="line"><span class="comment"># echo 1 &gt; /proc/sys/net/ipv4/ip_forward</span></span><br><span class="line"><span class="comment"># echo 1 &gt; /proc/sys/net/netfilter/nf_conntrack_helper</span></span><br></pre></td></tr></table></figure>
+
+<p>使用<code>scapy</code>构造异常报文发送：</p>
+<figure class="highlight python"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">&gt;&gt;&gt; </span>payload = <span class="string">&#x27;425945207369703a736572766963654030303937302e312e312e313a35303630205349502f322e300d0a5669613a205349502f322e302f5544502031302e3130332e3234302e3233323a353036303b6272616e63683d7a39684734624b2d313032373537382d313835392d390d0a46726f6d3a2073697070203c7369703a736970704031302e3130332e3234302e3233323a353036303e3b7461673d313835390d0a546f3a20737574203c7369703a736572766963654030303937302e312e312e313a353036303e3b7461673d3132393736534950705461673031313835390d0a43616c6c2d49443a20313835392d313032373537384031302e3130332e3234302e3233320d0a435365713a2032204259450d0a436f6e746163743a207369703a736970704031302e3130332e3234302e3233323a353036300d0a4d61782d466f7277617264733a2037300d0a5375626a6563743a20506572666f726d616e636520546573740d0a436f6e74656e742d4c656e6774683a20300d0a0d0a&#x27;</span>.decode(<span class="string">&#x27;hex&#x27;</span>)</span><br><span class="line"><span class="meta">&gt;&gt;&gt; </span>send(IP(dst=<span class="string">&quot;10.103.241.233&quot;</span>)/UDP(sport=<span class="number">5060</span>,dport=<span class="number">5060</span>)/payload)</span><br><span class="line">.</span><br><span class="line">Sent <span class="number">1</span> packets.</span><br></pre></td></tr></table></figure>
+
+<p>再通过<code>kprobe</code>输出<code>in4_pton</code>的参数：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ./kprobe &#x27;p:in4_pton src=+0(%di):string&#x27;</span></span><br><span class="line">				&lt;idle&gt;-0     [002] ..s. 858059.345971: in4_pton: (in4_pton+0x0/0x170) src=<span class="string">&quot;00970.1.1.1:5060 SIP/2.0</span></span><br><span class="line"><span class="string">Via: SIP/2.0/UDP 10.103.240.232:5060;branch=z9hG4bK-1027578-1859-9</span></span><br><span class="line"><span class="string">From: sipp &lt;sip:sipp@10.103.240.232:5060&gt;;tag=1859</span></span><br><span class="line"><span class="string">To: sut &lt;sip:service@00970.1.1.1:5060&gt;;tag=12976SIPpTag011859</span></span><br><span class="line"><span class="string">Call-ID: 1859-1027578@10.103.240.232</span></span><br><span class="line"><span class="string">CSeq: 2 BYE</span></span><br><span class="line"><span class="string">Contact: sip:sipp@10.103.240.232:5060</span></span><br><span class="line"><span class="string">Max-Forwards: 70</span></span><br><span class="line"><span class="string">Subject: Performance Test</span></span><br><span class="line"><span class="string">Content-Length: 0</span></span><br><span class="line"><span class="string"></span></span><br><span class="line"><span class="string">&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>从<code>kprobe</code>输出中可以看到，内核<code>in4_pton</code>的参数<code>src</code>也是若干<code>0</code>开头的字符串，按照对代码的分析会溢出，但为啥内核还是好好的？是不是内核溢出不会导致coredump？</p>
+<p>据此，编写一个溢出的内核模块：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/module.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/kernel.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">init</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">        <span class="keyword">int</span> i, w, c;</span><br><span class="line"></span><br><span class="line">        printk(<span class="string">&quot;mo loaded.\n&quot;</span>);</span><br><span class="line"></span><br><span class="line">        w = <span class="number">0</span>;</span><br><span class="line">        c = <span class="number">0x30000</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; <span class="number">30</span>; i++) &#123;</span><br><span class="line">                w = w * <span class="number">10</span> + c;</span><br><span class="line">                printk(<span class="string">&quot;w = 0x%08x\n&quot;</span>, w);</span><br><span class="line">        &#125;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">fini</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">        printk(<span class="string">&quot;mo unloaded.\n&quot;</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">module_init(init);</span><br><span class="line">module_exit(fini);</span><br><span class="line">MODULE_LICENSE(<span class="string">&quot;GPL&quot;</span>);</span><br></pre></td></tr></table></figure>
+
+<p>加载模块后观察日志输出：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346619</span> warning [kernel:] [<span class="number">195343.614466</span>] mo loaded.</span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346629</span> warning [kernel:] [<span class="number">195343.614467</span>] w = <span class="number">0x00030000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346630</span> warning [kernel:] [<span class="number">195343.614468</span>] w = <span class="number">0x00210000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346631</span> warning [kernel:] [<span class="number">195343.614468</span>] w = <span class="number">0x014d0000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346631</span> warning [kernel:] [<span class="number">195343.614468</span>] w = <span class="number">0x0d050000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346631</span> warning [kernel:] [<span class="number">195343.614469</span>] w = <span class="number">0x82350000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346632</span> warning [kernel:] [<span class="number">195343.614469</span>] w = <span class="number">0x16150000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346632</span> warning [kernel:] [<span class="number">195343.614469</span>] w = <span class="number">0xdcd50000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346639</span> warning [kernel:] [<span class="number">195343.614470</span>] w = <span class="number">0xa0550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346639</span> warning [kernel:] [<span class="number">195343.614470</span>] w = <span class="number">0x43550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346639</span> warning [kernel:] [<span class="number">195343.614470</span>] w = <span class="number">0xa1550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346640</span> warning [kernel:] [<span class="number">195343.614471</span>] w = <span class="number">0x4d550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346640</span> warning [kernel:] [<span class="number">195343.614471</span>] w = <span class="number">0x05550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346640</span> warning [kernel:] [<span class="number">195343.614471</span>] w = <span class="number">0x35550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346641</span> warning [kernel:] [<span class="number">195343.614472</span>] w = <span class="number">0x15550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346641</span> warning [kernel:] [<span class="number">195343.614472</span>] w = <span class="number">0xd5550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346642</span> warning [kernel:] [<span class="number">195343.614472</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346642</span> warning [kernel:] [<span class="number">195343.614473</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346643</span> warning [kernel:] [<span class="number">195343.614473</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346643</span> warning [kernel:] [<span class="number">195343.614473</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346643</span> warning [kernel:] [<span class="number">195343.614473</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346644</span> warning [kernel:] [<span class="number">195343.614474</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346644</span> warning [kernel:] [<span class="number">195343.614474</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346645</span> warning [kernel:] [<span class="number">195343.614474</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346645</span> warning [kernel:] [<span class="number">195343.614475</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346646</span> warning [kernel:] [<span class="number">195343.614475</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346646</span> warning [kernel:] [<span class="number">195343.614475</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346647</span> warning [kernel:] [<span class="number">195343.614475</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346647</span> warning [kernel:] [<span class="number">195343.614476</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346648</span> warning [kernel:] [<span class="number">195343.614476</span>] w = <span class="number">0x55550000</span></span><br><span class="line"><span class="number">2022</span><span class="number">-12</span><span class="number">-16</span> <span class="number">15</span>:<span class="number">50</span>:<span class="number">18.346648</span> warning [kernel:] [<span class="number">195343.614476</span>] w = <span class="number">0x55550000</span></span><br></pre></td></tr></table></figure>
+
+<p>结果看上去确实溢出了，但没有造成coredump。</p>
+<h1 id="mulvsi3"><a href="#mulvsi3" class="headerlink" title="__mulvsi3"></a>__mulvsi3</h1><p>回过头看最初造成coredump的函数<code>__mulvsi3</code>，该函数是GCC内置函数，对应的汇编代码为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line">00000000004005f0 &lt;__mulvsi3&gt;:</span><br><span class="line">  4005f0:       48 63 c7                movslq %edi,%rax</span><br><span class="line">  4005f3:       48 63 f6                movslq %esi,%rsi</span><br><span class="line">  4005f6:       48 0f af c6             imul   %rsi,%rax /* rax = rax * rsi */</span><br><span class="line">  4005fa:       48 89 c2                mov    %rax,%rdx</span><br><span class="line">  4005fd:       89 c1                   mov    %eax,%ecx</span><br><span class="line">  4005ff:       48 c1 fa 20             sar    $0x20,%rdx</span><br><span class="line">  400603:       c1 f9 1f                sar    $0x1f,%ecx</span><br><span class="line">  400606:       39 d1                   cmp    %edx,%ecx /* rdx &gt;&gt; 0x20 == ecx &gt;&gt; 0x1f */</span><br><span class="line">  400608:       75 02                   jne    40060c &lt;__mulvsi3+0x1c&gt;</span><br><span class="line">  40060a:       f3 c3                   repz retq </span><br><span class="line">  40060c:       50                      push   %rax</span><br><span class="line">  40060d:       e8 1e fe ff ff          callq  400430 &lt;abort@plt&gt;</span><br><span class="line">  400612:       66 2e 0f 1f 84 00 00    nopw   %cs:0x0(%rax,%rax,1)</span><br><span class="line">  400619:       00 00 00 </span><br><span class="line">  40061c:       0f 1f 40 00             nopl   0x0(%rax)</span><br></pre></td></tr></table></figure>
+
+<p>可以看到在计算完乘积后，通过最高位的进位和次高位的进位情况进行溢出判断（双高位判断法，原理没搞懂），如果发生溢出则跳转，并且最终执行<code>abort</code>。</p>
+<p>为什么内核没有发生coredump，大概因为内核的乘法对应的实现没有做溢出检测。应用层也是同理，如果对应的乘法实现没有溢出检测的话也不会出现coredump。</p>
+<p>通常来说，整数溢出的问题主要可能影响一些条件判断，进而造成死循环等问题，这种导致coredump的比较少，但总的来说还是应该尽量避免。</p>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/21/A-multiplication-overflow-problem/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Other/" rel="tag">Other</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+      <a href="/2023/01/21/Record-of-using-kprobe/" class="article-nav-link">
+        <strong class="article-nav-caption">上一篇</strong>
+        <div class="article-nav-title">
+          
+            Record of using kprobe
+          
+        </div>
+      </a>
+    
+    
+      <a href="/2022/05/22/How-does-QEMU-notify-Guest-the-nic-link-status-changed/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">How does QEMU notify Guest the nic link status changed</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>

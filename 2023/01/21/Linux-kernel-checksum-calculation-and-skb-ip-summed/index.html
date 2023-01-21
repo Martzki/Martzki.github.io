@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>Linux kernel checksum calculation and skb-&gt;ip_summed |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-Linux-kernel-checksum-calculation-and-skb-ip-summed"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  Linux kernel checksum calculation and skb-&gt;ip_summed
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/Linux-kernel-checksum-calculation-and-skb-ip-summed/" class="article-date">
+  <time datetime="2023-01-21T14:25:40.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">4.2k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">19 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Background"><a href="#Background" class="headerlink" title="Background"></a>Background</h1><p>最近在看内核相关的checksum代码，起因是往虚拟机virtio-net发包时，想通过<code>VIRTIO_NET_HDR_F_DATA_VALID</code>这个flag减少GuestOS的校验和计算开销。关于这个flag，以及<code>virtio_net_hdr</code>这个结构体相关的内容，值得单独说明，所以在这里只是简单提一下。</p>
+<p>最初的疑问是<code>VIRTIO_NET_HDR_F_DATA_VALID</code>到底对应几层校验和？</p>
+<p>从其定义（DPDK 19.11）可以看到：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * This is the first element of the scatter-gather list.  If you don&#x27;t</span></span><br><span class="line"><span class="comment"> * specify GSO or CSUM features, you can simply ignore the header.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">virtio_net_hdr</span> &#123;</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_F_NEEDS_CSUM 1    <span class="comment">/**&lt; Use csum_start,csum_offset*/</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_F_DATA_VALID 2    <span class="comment">/**&lt; Checksum is valid */</span></span></span><br><span class="line">	<span class="keyword">uint8_t</span> flags;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_GSO_NONE     0    <span class="comment">/**&lt; Not a GSO frame */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_GSO_TCPV4    1    <span class="comment">/**&lt; GSO frame, IPv4 TCP (TSO) */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_GSO_UDP      3    <span class="comment">/**&lt; GSO frame, IPv4 UDP (UFO) */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_GSO_TCPV6    4    <span class="comment">/**&lt; GSO frame, IPv6 TCP */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> VIRTIO_NET_HDR_GSO_ECN      0x80 <span class="comment">/**&lt; TCP has ECN set */</span></span></span><br><span class="line">	<span class="keyword">uint8_t</span> gso_type;</span><br><span class="line">	<span class="keyword">uint16_t</span> hdr_len;     <span class="comment">/**&lt; Ethernet + IP + tcp/udp hdrs */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> gso_size;    <span class="comment">/**&lt; Bytes to append to hdr_len per frame */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> csum_start;  <span class="comment">/**&lt; Position to start checksumming from */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> csum_offset; <span class="comment">/**&lt; Offset after that to place checksum */</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p><code>virtio_net_hdr</code>包含了报文的<code>csum_start</code>和<code>csum_offset</code>，且包含了gso相关字段，从这里可以猜测，它就是描述L4的卸载相关属性的。</p>
+<p>为此再接着看<code>VIRTIO_NET_HDR_F_DATA_VALID</code>相关的处理逻辑。</p>
+<p>首先看内核（4.18）相关实现：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">int</span> <span class="title">virtio_net_hdr_from_skb</span><span class="params">(<span class="keyword">const</span> struct sk_buff *skb,</span></span></span><br><span class="line"><span class="params"><span class="function">					  struct virtio_net_hdr *hdr,</span></span></span><br><span class="line"><span class="params"><span class="function">					  <span class="keyword">bool</span> little_endian,</span></span></span><br><span class="line"><span class="params"><span class="function">					  <span class="keyword">bool</span> has_data_valid,</span></span></span><br><span class="line"><span class="params"><span class="function">					  <span class="keyword">int</span> vlan_hlen)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (skb-&gt;ip_summed == CHECKSUM_PARTIAL) &#123;</span><br><span class="line">		hdr-&gt;flags = VIRTIO_NET_HDR_F_NEEDS_CSUM;</span><br><span class="line">		hdr-&gt;csum_start = __cpu_to_virtio16(little_endian,</span><br><span class="line">			skb_checksum_start_offset(skb) + vlan_hlen);</span><br><span class="line">		hdr-&gt;csum_offset = __cpu_to_virtio16(little_endian,</span><br><span class="line">				skb-&gt;csum_offset);</span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> (has_data_valid &amp;&amp;</span><br><span class="line">		   skb-&gt;ip_summed == CHECKSUM_UNNECESSARY) &#123;</span><br><span class="line">		hdr-&gt;flags = VIRTIO_NET_HDR_F_DATA_VALID;</span><br><span class="line">	&#125; <span class="comment">/* else everything is zero */</span></span><br><span class="line">......</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">receive_buf</span><span class="params">(struct virtnet_info *vi, struct receive_queue *rq,</span></span></span><br><span class="line"><span class="params"><span class="function">			<span class="keyword">void</span> *buf, <span class="keyword">unsigned</span> <span class="keyword">int</span> len, <span class="keyword">void</span> **ctx,</span></span></span><br><span class="line"><span class="params"><span class="function">			<span class="keyword">unsigned</span> <span class="keyword">int</span> *xdp_xmit, <span class="keyword">unsigned</span> <span class="keyword">int</span> *rbytes)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	<span class="keyword">if</span> (hdr-&gt;hdr.flags &amp; VIRTIO_NET_HDR_F_DATA_VALID)</span><br><span class="line">		skb-&gt;ip_summed = CHECKSUM_UNNECESSARY;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>再看DPDK pmd_virtio中的相关实现：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Optionally fill offload information in structure */</span></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">int</span></span></span><br><span class="line"><span class="function"><span class="title">virtio_rx_offload</span><span class="params">(struct rte_mbuf *m, struct virtio_net_hdr *hdr)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">......</span><br><span class="line">	&#125; <span class="keyword">else</span> <span class="keyword">if</span> (hdr-&gt;flags &amp; VIRTIO_NET_HDR_F_DATA_VALID &amp;&amp; l4_supported) &#123;</span><br><span class="line">		m-&gt;ol_flags |= PKT_RX_L4_CKSUM_GOOD;</span><br><span class="line">	&#125;</span><br><span class="line">......</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>从DPDK的代码中可以直观地确认，当PMD收到有<code>VIRTIO_NET_HDR_F_DATA_VALID</code>置位的报文时，为mbuf置上<code>PKT_RX_L4_CKSUM_GOOD</code>以标识L4校验和正确；内核对应的情况是<code>skb-&gt;ip_summed == CHECKSUM_UNNECESSARY</code>。</p>
+<p>这里就是比较疑惑的地方了：既然从结构体本身成员，以及DPDK代码中大致确认，<code>VIRTIO_NET_HDR_F_DATA_VALID</code>是描述的L4校验和状态，为何内核中的代码对应的是<code>skb-&gt;ip_summed</code>这个成员呢？从其命名上看应该描述的是L3/IP的校验和才对呀？</p>
+<h1 id="skb-gt-ip-summed"><a href="#skb-gt-ip-summed" class="headerlink" title="skb-&gt;ip_summed"></a>skb-&gt;ip_summed</h1><p>首先关注这个令人疑惑的成员，在<code>skbuff.h</code>中，有大段的注释对其进行了详细的描述。</p>
+<p>下面对接收方向进行说明，<code>skb-&gt;ip_summed</code>可能的取值有<code>CHECKSUM_NONE</code>、<code>CHECKSUM_UNNECESSARY</code>、<code>CHECKSUM_COMPLETE</code>和<code>CHECKSUM_PARTIAL</code>。</p>
+<h2 id="CHECKSUM-NONE"><a href="#CHECKSUM-NONE" class="headerlink" title="CHECKSUM_NONE"></a>CHECKSUM_NONE</h2><p>这种情况很好理解，注释上解释的也比较清楚，当硬件没有对报文进行校验（如硬件不支持校验特性）时，会将<code>skb-&gt;ip_summed</code>置为<code>CHECKSUM_NONE</code>，并且此时的<code>skb-&gt;csum</code>也是无意义的。软件针对此种场景需要完整计算校验和。</p>
+<h2 id="CHECKSUM-COMPLETE"><a href="#CHECKSUM-COMPLETE" class="headerlink" title="CHECKSUM_COMPLETE"></a>CHECKSUM_COMPLETE</h2><p>这是最通用的一种场景，硬件计算了报文从L4头部开始的数据的1的补码和并且保存到了<code>skb-&gt;csum</code>。</p>
+<p>需要注意的是，硬件不需要对L3/L4进行协议解析即可做到这一点。因为整个IP协议族（IPv4、TCP、UDP等）的校验和计算方式都是一样的，即1的反码和的16bit 1的补码，所以这种情况下硬件只需从L4头部开始计算剩余的1的补码和即可。</p>
+<p>在软件计算特定的L4校验和时，可以通过硬件计算的完整结果<code>skb-&gt;csum</code>，进行进一步计算获得最终结果。如：TCP通过<code>skb-&gt;csum</code>加上伪校验和来计算TCP校验和。</p>
+<h2 id="CHECKSUM-UNNECESSARY"><a href="#CHECKSUM-UNNECESSARY" class="headerlink" title="CHECKSUM_UNNECESSARY"></a>CHECKSUM_UNNECESSARY</h2><p>这种场景下，硬件已经确认了特定类型（TCP、UDP、GRE、SCP和FCoE）的L4协议的校验和正确，软件无需再进行校验和的验证。</p>
+<p>需要注意的是，尽管已经确定了特定类型的L4校验和正确，<code>skb-&gt;csum</code>还是未定义的，且后续流程也不应该修改<code>skb-&gt;csum</code>。</p>
+<h2 id="CHECKSUM-PARTIAL"><a href="#CHECKSUM-PARTIAL" class="headerlink" title="CHECKSUM_PARTIAL"></a>CHECKSUM_PARTIAL</h2><p>这种场景硬件计算从<code>skb-&gt;csum_start</code>开始的数据的校验和，并保存到<code>skb-&gt;csum_start + skb-&gt;csum_offset</code>的位置上。</p>
+<h2 id="Why-is-it-named-as-ip-summed"><a href="#Why-is-it-named-as-ip-summed" class="headerlink" title="Why is it named as ip_summed?"></a>Why is it named as ip_summed?</h2><p>从上面的取值场景可以发现，<code>skb-&gt;ip_summed</code>描述的是L4的校验和状态，这和对DPDK代码，以及<code>virtio_net_hdr</code>的分析的结论是一致的，但是为什么用了一个这么令人费解的命名呢？</p>
+<p>为此我向Linux netdev的mailing list发送了一封邮件询问这件事，有幸得到了大佬的解答，大意是：<strong>虽然命名确实很令人费解，但<code>skb-&gt;ip_summed</code>描述的是L4的校验和状态。</strong>主要原因是整个IP协议族的校验和计算方式都是一样的，所以命名里的ip不是专指IP协议，而是指IP协议族使用的校验和计算方式。其实不仅仅是<code>ip_summed</code>，内核里应该也有一些地方的ip并不是特指IPv4协议，如<code>ip_compute_csum </code>。</p>
+<p>同时关于L3/IP校验和，由于L3/IP校验和只需要计算首部，计算量不大，并且在报文接收，解析报文首部时，首部的内容已经被缓存到cache中去了，所以软件计算的开销会很小，由内核进行L3/IP的校验和计算。</p>
+<p>完整邮件见：<a target="_blank" rel="noopener" href="https://www.spinics.net/lists/netdev/msg854092.html">Confused about ip_summed member in sk_buff</a>。</p>
+<h1 id="How-does-kernel-calculate-the-checksum"><a href="#How-does-kernel-calculate-the-checksum" class="headerlink" title="How does kernel calculate the checksum?"></a>How does kernel calculate the checksum?</h1><h2 id="IPv4"><a href="#IPv4" class="headerlink" title="IPv4"></a>IPv4</h2><blockquote>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">Header Checksum:  16 bits</span><br><span class="line"></span><br><span class="line">  A checksum on the header only.  Since some header fields change</span><br><span class="line">  (e.g., time to live), this is recomputed and verified at each point</span><br><span class="line">  that the internet header is processed.</span><br><span class="line"></span><br><span class="line">  The checksum algorithm is:</span><br><span class="line"></span><br><span class="line">    The checksum field is the 16 bit one&#x27;s complement of the one&#x27;s</span><br><span class="line">    complement sum of all 16 bit words in the header.  For purposes of</span><br><span class="line">    computing the checksum, the value of the checksum field is zero.</span><br><span class="line">														——RFC791</span><br></pre></td></tr></table></figure>
+</blockquote>
+<p>从IPv4校验和的定义可以知道，它的值就是首部所有16bit字的1的补码和的1的补码，计算时，校验和字段以0计算。</p>
+<p>以如下报文为例：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line">16:31:34.953256 00:50:56:97:d1:f3 &gt; a8:0c:ca:5f:8c:5c, ethertype IPv4 (0x0800), length 32174: (tos 0x0, ttl 64, id 5604, offset 0, flags [DF], proto TCP (6), length 32160)</span><br><span class="line">    10.103.240.223.22 &gt; 172.23.9.13.12036: Flags [.], cksum 0x2dfe (incorrect -&gt; 0x18ca), seq 74390940:74423060, ack 4837, win 64512, length 32120</span><br><span class="line">        0x0000:  a80c ca5f 8c5c 0050 5697 d1f3 0800 4500  ..._.\.PV.....E.</span><br><span class="line">        0x0010:  7da0 15e4 4000 4006 f708 0a67 f0df ac17  &#125;...@.@....g....</span><br><span class="line">        0x0020:  090d 0016 2f04 fb22 4704 23c3 2b20 5010  ..../..&quot;G.#.+.P.</span><br><span class="line">        0x0030:  fc00 2dfe 0000 33cd 52ed 85f9 888f b0aa  ..-...3.R.......</span><br><span class="line">        0x0040:  7d4e 3cd0 db58 27eb bb87 a09e ea81 c61a  &#125;N&lt;..X&#x27;.........</span><br><span class="line">        0x0050:  9119 23bd 0fa0 dd44 cae2 e84f 4c31 0241  ..#....D...OL1.A</span><br><span class="line">        0x0060:  54ee 860e 3feb 6d4e 1bd1 2ef5 faeb e2e4  T...?.mN........</span><br><span class="line">        0x0070:  6421 7c4d 3ec6 1e5f 0bd9 88ea 4776 3a5d  d!|M&gt;.._....Gv:]</span><br><span class="line">        0x0080:  0a05 abf7 fbd4 69f6 c1d9 74c9 fefc 2fc7  ......i...t.../.</span><br><span class="line">        0x0090:  c8b0 b447 ccb9 6148 9480 d78a c3e9 8e95  ...G..aH........</span><br><span class="line">        0x00a0:  1d04 c8fd 66ab 993e ecf3 7ceb 5443 adfb  ....f..&gt;..|.TC..</span><br><span class="line">        0x00b0:  a6e9 1e55 49d2 b86e 238d bac6 24aa 1b27  ...UI..n#...$..&#x27;</span><br></pre></td></tr></table></figure>
+
+<p>IPv4首部为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">4500 7da0 15e4 4000 4006 f708 0a67 f0df ac17 090d</span><br></pre></td></tr></table></figure>
+
+<p>其中校验和为：<code>f708</code>。</p>
+<p>下面来实际算一遍。根据校验和定义，先将校验和字段置零，所以IPv4首部在未计算校验和时为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">4500 7da0 15e4 4000 4006 0000 0a67 f0df ac17 090d</span><br></pre></td></tr></table></figure>
+
+<p>先将首部所有16bit字相加：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sum(32bit integer) = 0x4500 + 0x7da0 + 0x15e4 + 0x4000 + 0x4006 + 0x0000 + 0x0a67 + 0xf0df + 0xac17 + 0x090d</span><br><span class="line">sum(32bit integer) = 0x308f4</span><br></pre></td></tr></table></figure>
+
+<p>再根据1的补码的加法原则，将进位加回结果：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sum(one&#x27;s complement) = 0x08f4 + 0x3 (sum + carry)</span><br><span class="line">sum(one&#x27;s complement) = 0x08f7</span><br></pre></td></tr></table></figure>
+
+<p>再对和求16bit 1的补码：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">csum = 16bit one’s complement(0x08f7) = 0xf708</span><br></pre></td></tr></table></figure>
+
+<p>可以看到，计算出的结果正好就和报文内原始的值相同，证明报文内的校验和字段是正确的。</p>
+<p>当然还有另一种验证方式，在计算16bit 1的补码和时，将校验和的值也加入计算，然后判断最终值是否为0xffff（16bit 1的补码中的-0）。</p>
+<p>再看看内核中通用的、非内联汇编版本的IPv4校验和实现<code>ip_fast_csum</code>，调用路径为<code>ip_rcv</code>-&gt;<code>ip_fast_csum</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> __sum16 <span class="title">ip_fast_csum</span><span class="params">(<span class="keyword">const</span> <span class="keyword">void</span> *iph, <span class="keyword">unsigned</span> <span class="keyword">int</span> ihl)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">const</span> <span class="keyword">unsigned</span> <span class="keyword">int</span> *word = iph;</span><br><span class="line">	<span class="keyword">const</span> <span class="keyword">unsigned</span> <span class="keyword">int</span> *stop = word + ihl;</span><br><span class="line">	<span class="keyword">unsigned</span> <span class="keyword">int</span> csum;</span><br><span class="line">	<span class="keyword">int</span> carry;</span><br><span class="line"></span><br><span class="line">	csum = word[<span class="number">0</span>];</span><br><span class="line">	csum += word[<span class="number">1</span>];</span><br><span class="line">	carry = (csum &lt; word[<span class="number">1</span>]);</span><br><span class="line">	csum += carry;</span><br><span class="line"></span><br><span class="line">	csum += word[<span class="number">2</span>];</span><br><span class="line">	carry = (csum &lt; word[<span class="number">2</span>]);</span><br><span class="line">	csum += carry;</span><br><span class="line"></span><br><span class="line">	csum += word[<span class="number">3</span>];</span><br><span class="line">	carry = (csum &lt; word[<span class="number">3</span>]);</span><br><span class="line">	csum += carry;</span><br><span class="line"></span><br><span class="line">	word += <span class="number">4</span>;</span><br><span class="line">	<span class="keyword">do</span> &#123;</span><br><span class="line">		csum += *word;</span><br><span class="line">		carry = (csum &lt; *word);</span><br><span class="line">		csum += carry;</span><br><span class="line">		word++;</span><br><span class="line">	&#125; <span class="keyword">while</span> (word != stop);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> csum_fold(csum);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>需要注意的是，这个函数内，单次计算数据单位为32bit，并没有完全按照RFC的定义进行16bit累加，原因是32bit累加性能更好。</p>
+<p>可以很容易想到，16bit累加的结果在32bit累加中是等效的，当低16bit累加发生进位后，会加到高16bit上去，高16bit再发生进位的话，再加回低16bit。这里可以看到代码里通过累加和与加数之间的大小比较，来确定是否发生了进位，如果进位加回累加和。</p>
+<p>还有一点需要注意的是，IPv4协议首部是可变长度，最短20字节，为什么这个版本的实现中，先计算了前16字节，而不是20字节呢？这一点我个人的理解是16字节是2的幂，考虑指令、cache等因素下，应该性能会更好。</p>
+<p>累加和计算完成后，调用<code>csum_fold</code>对结果进行折叠取反：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> __sum16 <span class="title">csum_fold</span><span class="params">(__wsum csum)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	u32 sum = (__force u32)csum;</span><br><span class="line">	sum = (sum &amp; <span class="number">0xffff</span>) + (sum &gt;&gt; <span class="number">16</span>);</span><br><span class="line">	sum = (sum &amp; <span class="number">0xffff</span>) + (sum &gt;&gt; <span class="number">16</span>);</span><br><span class="line">	<span class="keyword">return</span> (__force __sum16)~sum;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>因为前面计算的累加和是32bit的，根据1的补码加法定义，高低16bit需要再加在一起，才是最后的结果。从形式上看，就像对累加和进行了折叠（fold）一样。折叠完了以后，就是完整了1的补码和了，再对结果求16bit 1的补码（取反），就得到了最终的校验和。这也是为什么很多地方把校验和计算的过程描述成“累加取反”，但光从这个描述很难和原始定义对应上。</p>
+<h2 id="TCP"><a href="#TCP" class="headerlink" title="TCP"></a>TCP</h2><blockquote>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line">Checksum:  16 bits</span><br><span class="line"></span><br><span class="line">  The checksum field is the 16 bit one&#x27;s complement of the one&#x27;s</span><br><span class="line">  complement sum of all 16 bit words in the header and text.  If a</span><br><span class="line">  segment contains an odd number of header and text octets to be</span><br><span class="line">  checksummed, the last octet is padded on the right with zeros to</span><br><span class="line">  form a 16 bit word for checksum purposes.  The pad is not</span><br><span class="line">  transmitted as part of the segment.  While computing the checksum,</span><br><span class="line">  the checksum field itself is replaced with zeros.</span><br><span class="line"></span><br><span class="line">  The checksum also covers a 96 bit pseudo header conceptually </span><br><span class="line">  prefixed to the TCP header.  This pseudo header contains the Source</span><br><span class="line">  Address, the Destination Address, the Protocol, and TCP length.</span><br><span class="line">  This gives the TCP protection against misrouted segments.  This</span><br><span class="line">  information is carried in the Internet Protocol and is transferred</span><br><span class="line">  across the TCP/Network interface in the arguments or results of</span><br><span class="line">  calls by the TCP on the IP.</span><br><span class="line"></span><br><span class="line">                   +--------+--------+--------+--------+</span><br><span class="line">                   |           Source Address          |</span><br><span class="line">                   +--------+--------+--------+--------+</span><br><span class="line">                   |         Destination Address       |</span><br><span class="line">                   +--------+--------+--------+--------+</span><br><span class="line">                   |  zero  |  PTCL  |    TCP Length   |</span><br><span class="line">                   +--------+--------+--------+--------+</span><br><span class="line"></span><br><span class="line">    The TCP Length is the TCP header length plus the data length in</span><br><span class="line">    octets (this is not an explicitly transmitted quantity, but is</span><br><span class="line">    computed), and it does not count the 12 octets of the pseudo</span><br><span class="line">    header.</span><br><span class="line">                                                           --RFC793</span><br></pre></td></tr></table></figure>
+</blockquote>
+<p>和IPv4相比，TCP校验和除了还要计算payload（text）以外，还加上了伪头部（pseudo header），用于验证IPv4的信息是否匹配。伪头部是一个抽象的头部，只是为了在四层头部额外保存三层信息，一定程度上用于确认三层正确性，并不存在于实际报文中。同时，计算校验和时如果总数据不能整除16bit，则在末尾补0计算，这部分0同样只用来计算，也不存在于实际报文中。</p>
+<p>以如下报文为例：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">14:12:51.140861 a8:0c:ca:5f:8c:5c &gt; 00:50:56:97:d1:f3, ethertype IPv4 (0x0800), length 106: (tos 0x0, ttl 125, id 4094, offset 0, flags [DF], proto TCP (6), length 92)</span><br><span class="line">    172.23.9.13.2774 &gt; 10.103.240.223.22: Flags [P.], cksum 0xccb7 (correct), seq 0:52, ack 46045, win 32544, length 52</span><br><span class="line">        0x0000:  0050 5697 d1f3 a80c ca5f 8c5c 0800 4500  .PV......_.\..E.</span><br><span class="line">        0x0010:  005c 0ffe 4000 7d06 3d33 ac17 090d 0a67  .\..@.&#125;.=3.....g</span><br><span class="line">        0x0020:  f0df 0ad6 0016 6749 d568 1ba4 a329 5018  ......gI.h...)P.</span><br><span class="line">        0x0030:  7f20 ccb7 0000 0000 0010 f43e bdd1 e11e  ...........&gt;....</span><br><span class="line">        0x0040:  e612 f35a d406 61c9 6ed5 5f47 a7e5 5d56  ...Z..a.n._G..]V</span><br><span class="line">        0x0050:  9906 ce6e 15ac af67 e2a6 ffc8 8724 cdff  ...n...g.....$..</span><br><span class="line">        0x0060:  3d3f b304 5838 1883 71f6                 =?..X8..q.</span><br></pre></td></tr></table></figure>
+
+<p>伪头部（src addr + dst addr + zero + protocol + l4 length）为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">ac17 090d 0a67 f0df 0000 0006 0000 0048</span><br></pre></td></tr></table></figure>
+
+<p>TCP首部为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0ad6 0016 6749 d568 1ba4 a329 5018 7f20 ccb7 0000</span><br></pre></td></tr></table></figure>
+
+<p>其中校验和为：<code>ccb7</code>，计算校验和时将其置0：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0ad6 0016 6749 d568 1ba4 a329 5018 7f20 0000 0000</span><br></pre></td></tr></table></figure>
+
+<p>payload为：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">0000 0010 f43e bdd1 e11e e612 f35a d406 61c9 6ed5 5f47 a7e5 5d56 9906 ce6e 15ac af67 e2a6 ffc8 8724 cdff 3d3f b304 5838 1883 71f6</span><br></pre></td></tr></table></figure>
+
+<p>将所有16bit字相加：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sum(32bit integer) = 0xac17 + 0x090d + 0x0a67 + 0xf0df + 0x0000 + 0x0006 + 0x0000 + 0x0048 + 0x0ad6 + 0x0016 + 0x6749 + 0xd568 + 0x1ba4 + 0xa329 + 0x5018 + 0x7f20 + 0x0000 + 0x0000 + 0x0000 + 0x0010 + 0xf43e + 0xbdd1 + 0xe11e + 0xe612 + 0xf35a + 0xd406 + 0x61c9 + 0x6ed5 + 0x5f47 + 0xa7e5 + 0x5d56 + 0x9906 + 0xce6e + 0x15ac + 0xaf67 + 0xe2a6 + 0xffc8 + 0x8724 + 0xcdff + 0x3d3f + 0xb304 + 0x5838 + 0x1883 + 0x71f6</span><br><span class="line">sum(32bit integer) = 0x133335</span><br></pre></td></tr></table></figure>
+
+<p>再根据1的补码的加法原则，将进位加回结果：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">sum(one&#x27;s complement) = 0x3335 + 0x13 (sum + carry)</span><br><span class="line">sum(one&#x27;s complement) = 0x3348</span><br></pre></td></tr></table></figure>
+
+<p>再对和求16bit 1的补码：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">csum = 16bit one’s complement(0x3348) = 0xccb7</span><br></pre></td></tr></table></figure>
+
+<p>可以看到，计算出的结果正好就和TCP首部的值相同。</p>
+<p>内核中使用<code>csum_tcpudp_nofold</code>计算TCP的伪头部和，调用路径：<code>tcp_v4_rcv</code>-&gt;<code>skb_checksum_init</code>-&gt;<code>__skb_checksum_validate</code>-&gt;<code>inet_compute_pseudo</code>-&gt;<code>csum_tcpudp_nofold</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> u32 <span class="title">from64to32</span><span class="params">(u64 x)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="comment">/* add up 32-bit and 32-bit for 32+c bit */</span></span><br><span class="line">	x = (x &amp; <span class="number">0xffffffff</span>) + (x &gt;&gt; <span class="number">32</span>);</span><br><span class="line">	<span class="comment">/* add up carry.. */</span></span><br><span class="line">	x = (x &amp; <span class="number">0xffffffff</span>) + (x &gt;&gt; <span class="number">32</span>);</span><br><span class="line">	<span class="keyword">return</span> (u32)x;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function">__wsum <span class="title">csum_tcpudp_nofold</span><span class="params">(__be32 saddr, __be32 daddr,</span></span></span><br><span class="line"><span class="params"><span class="function">			  __u32 len, __u8 proto, __wsum sum)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">unsigned</span> <span class="keyword">long</span> <span class="keyword">long</span> s = (__force u32)sum;</span><br><span class="line"></span><br><span class="line">	s += (__force u32)saddr;</span><br><span class="line">	s += (__force u32)daddr;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">ifdef</span> __BIG_ENDIAN</span></span><br><span class="line">	s += proto + len;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">else</span></span></span><br><span class="line">	s += (proto + len) &lt;&lt; <span class="number">8</span>;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br><span class="line">	<span class="keyword">return</span> (__force __wsum)from64to32(s);</span><br><span class="line">&#125;</span><br><span class="line">EXPORT_SYMBOL(csum_tcpudp_nofold);</span><br></pre></td></tr></table></figure>
+
+<p>可以看到除了也是用32bit相加的方式以外，整体流程符合伪头部和计算的定义。还需要注意的一点是，上述调用链中，<code>csum_tcpudp_nofold</code>的参数中<code>len</code>的值为<code>skb-&gt;len</code>，<code>skb-&gt;len</code>代表当前协议层次的数据长度，当前为TCP协议处理流程，所以对应了TCP首部加TCP payload的总长；<code>sum</code>的值为0。</p>
+<p>再看<code>skb_checksum_init</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Perform checksum validate (init). Note that this is a macro since we only</span></span><br><span class="line"><span class="comment"> * want to calculate the pseudo header which is an input function if necessary.</span></span><br><span class="line"><span class="comment"> * First we try to validate without any computation (checksum unnecessary) and</span></span><br><span class="line"><span class="comment"> * then calculate based on checksum complete calling the function to compute</span></span><br><span class="line"><span class="comment"> * pseudo header.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Return values:</span></span><br><span class="line"><span class="comment"> *   0: checksum is validated or try to in skb_checksum_complete</span></span><br><span class="line"><span class="comment"> *   non-zero: value of invalid checksum</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> __skb_checksum_validate(skb, proto, complete,			\</span></span><br><span class="line"><span class="meta">				zero_okay, check, compute_pseudo)	\</span></span><br><span class="line"><span class="meta">(&#123;									\</span></span><br><span class="line"><span class="meta">	__sum16 __ret = 0;						\</span></span><br><span class="line"><span class="meta">	skb-&gt;csum_valid = 0;						\</span></span><br><span class="line"><span class="meta">	<span class="meta-keyword">if</span> (__skb_checksum_validate_needed(skb, zero_okay, check))	\</span></span><br><span class="line"><span class="meta">		__ret = __skb_checksum_validate_complete(skb,		\</span></span><br><span class="line"><span class="meta">				complete, compute_pseudo(skb, proto));	\</span></span><br><span class="line"><span class="meta">	__ret;								\</span></span><br><span class="line"><span class="meta">&#125;)</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> skb_checksum_init(skb, proto, compute_pseudo)			\</span></span><br><span class="line"><span class="meta">	__skb_checksum_validate(skb, proto, false, false, 0, compute_pseudo)</span></span><br></pre></td></tr></table></figure>
+
+<p><code>skb_checksum_init</code>直接调用了<code>__skb_checksum_validate</code>，可以看到里面逻辑先将<code>skb-&gt;csum_valid</code>初始化，再调用<code>__skb_checksum_validate_needed</code>判断是否需要计算校验和，如果需要的话，再调用<code>__skb_checksum_validate_complete</code>进行具体计算。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">int</span> <span class="title">skb_csum_unnecessary</span><span class="params">(<span class="keyword">const</span> struct sk_buff *skb)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ((skb-&gt;ip_summed == CHECKSUM_UNNECESSARY) ||</span><br><span class="line">		skb-&gt;csum_valid ||</span><br><span class="line">		(skb-&gt;ip_summed == CHECKSUM_PARTIAL &amp;&amp;</span><br><span class="line">		 skb_checksum_start_offset(skb) &gt;= <span class="number">0</span>));</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment">/* Check if we need to perform checksum complete validation.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Returns true if checksum complete is needed, false otherwise</span></span><br><span class="line"><span class="comment"> * (either checksum is unnecessary or zero checksum is allowed).</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">bool</span> __skb_checksum_validate_needed(struct sk_buff *skb,</span><br><span class="line">						  <span class="keyword">bool</span> zero_okay,</span><br><span class="line">						  __sum16 check)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (skb_csum_unnecessary(skb) || (zero_okay &amp;&amp; !check)) &#123;</span><br><span class="line">		skb-&gt;csum_valid = <span class="number">1</span>;</span><br><span class="line">		__skb_decr_checksum_unnecessary(skb);</span><br><span class="line">		<span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>__skb_checksum_validate_needed</code>中逻辑较为简单，当<code>skb_csum_unnecessary</code>返回<code>true</code>或当前校验和<code>check</code>为<code>0</code>并且为0的校验和是合法值时，将<code>skb-&gt;csum_valid</code>置1，并且调整skb中<code>CHECKSUM_UNNECESSARY</code>相关成员的值，返回<code>false</code>，否则返回<code>true</code>。</p>
+<p><code>skb_csum_unnecessary</code>中则是根据<code>skb-&gt;ip_summed</code>以及其他skb的信息判断是否有必要计算校验和：</p>
+<ul>
+<li><code>skb-&gt;ip_summed == CHECKSUM_UNNECESSARY</code>：无需计算，和上面对<code>CHECKSUM_UNNECESSARY</code>的分析一致，这种情况下硬件已经确认校验和正确，协议栈不需要任何计算。</li>
+<li><code>skb-&gt;csum_valid == 1</code>：无需计算，当前协议层次的校验和已被确认为合法值。</li>
+<li><code>skb-&gt;ip_summed == CHECKSUM_PARTIAL &amp;&amp; skb_checksum_start_offset(skb) &gt;= 0</code>：无需计算，<code>CHECKSUM_PARTIAL</code>代表部分校验和已被硬件计算，<code>skb_checksum_start_offset(skb)</code>代表<code>skb-&gt;csum_start</code>合法，即已被计算的那部分校验和是合法的。</li>
+<li>其他情况：需要计算。</li>
+</ul>
+<p>需要计算校验和的场景，调用<code>__skb_checksum_validate_complete</code>进行计算：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Validate (init) checksum based on checksum complete.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Return values:</span></span><br><span class="line"><span class="comment"> *   0: checksum is validated or try to in skb_checksum_complete. In the latter</span></span><br><span class="line"><span class="comment"> *	case the ip_summed will not be CHECKSUM_UNNECESSARY and the pseudo</span></span><br><span class="line"><span class="comment"> *	checksum is stored in skb-&gt;csum for use in __skb_checksum_complete</span></span><br><span class="line"><span class="comment"> *   non-zero: value of invalid checksum</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">inline</span> __sum16 __skb_checksum_validate_complete(struct sk_buff *skb,</span><br><span class="line">						       <span class="keyword">bool</span> complete,</span><br><span class="line">						       __wsum psum)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="keyword">if</span> (skb-&gt;ip_summed == CHECKSUM_COMPLETE) &#123;</span><br><span class="line">		<span class="keyword">if</span> (!csum_fold(csum_add(psum, skb-&gt;csum))) &#123;</span><br><span class="line">			skb-&gt;csum_valid = <span class="number">1</span>;</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">		&#125;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	skb-&gt;csum = psum;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (complete || skb-&gt;len &lt;= CHECKSUM_BREAK) &#123;</span><br><span class="line">		__sum16 csum;</span><br><span class="line"></span><br><span class="line">		csum = __skb_checksum_complete(skb);</span><br><span class="line">		skb-&gt;csum_valid = !csum;</span><br><span class="line">		<span class="keyword">return</span> csum;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>准确来说，<code>__skb_checksum_validate_complete</code>只处理<code>CHECKSUM_COMPLETE</code>相关的场景。</p>
+<p>特别地，当<code>skb-&gt;ip_summed == CHECKSUM_COMPLETE</code>时，根据前面对<code>CHECKSUM_COMPLETE</code>场景的分析，此时<code>skb-&gt;csum</code>保存的是L4开始的1的补码和，直接将<code>skb-&gt;csum</code>和<code>psum</code>累加取反即可得到TCP校验和。</p>
+<p>对于特殊场景，如下面的分支中，会直接调用<code>__skb_checksum_complete</code>进行完整计算，否则只保存伪头部和，在后续流程中（如<code>tcp_v4_rcv</code>-&gt;<code>tcp_v4_do_rcv</code>-&gt;<code>tcp_checksum_complete</code>）再进行完整计算。</p>
+<p><code>tcp_checksum_complete</code>最终也是调用<code>__skb_checksum_complete</code>进行计算，其中逻辑大概也是求补码和，然后取反。求补码和的地方相对比较复杂，涉及skb链的场景，就不细说了。</p>
+<h2 id="UDP"><a href="#UDP" class="headerlink" title="UDP"></a>UDP</h2><blockquote>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">Checksum is the 16-bit one&#x27;s complement of the one&#x27;s complement sum of a</span><br><span class="line">pseudo header of information from the IP header, the UDP header, and the</span><br><span class="line">data,  padded  with zero octets  at the end (if  necessary)  to  make  a</span><br><span class="line">multiple of two octets.</span><br><span class="line">                                                               --RFC 768</span><br></pre></td></tr></table></figure>
+</blockquote>
+<p>UDP首部校验和与TCP校验和的计算方式基本一致，也需要计算伪头部，但不需要计算payload，具体流程就不展开细说了。</p>
+<p>一个典型的调用链：<code>udp_rcv</code>-&gt;<code>__udp4_lib_rcv</code>-&gt;<code>udp4_csum_init</code>-&gt;<code>skb_checksum_init_zero_check</code>。</p>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/21/Linux-kernel-checksum-calculation-and-skb-ip-summed/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Other/" rel="tag">Other</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+      <a href="/2023/01/21/Record-of-learning-AF-XDP/" class="article-nav-link">
+        <strong class="article-nav-caption">上一篇</strong>
+        <div class="article-nav-title">
+          
+            Record of learning AF_XDP
+          
+        </div>
+      </a>
+    
+    
+      <a href="/2023/01/21/Record-of-using-kprobe/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">Record of using kprobe</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>

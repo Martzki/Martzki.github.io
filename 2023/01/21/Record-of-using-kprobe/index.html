@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>Record of using kprobe |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-Record-of-using-kprobe"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  Record of using kprobe
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/Record-of-using-kprobe/" class="article-date">
+  <time datetime="2023-01-21T14:19:02.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">4k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">19 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Background"><a href="#Background" class="headerlink" title="Background"></a>Background</h1><p>之前在生产环境排查了一个TCP的ACK无法被正确接收，导致发送端一直重传，最终接收端keepalive超时后关闭连接的问题（<a target="_blank" rel="noopener" href="https://patchwork.ozlabs.org/project/netfilter-devel/patch/20220818224231.11583-1-fw@strlen.de/">[nf] netfilter: conntrack: work around exceeded receive window</a>）。排查过程中主要用到了kprobe这个动态调试手段去分析内核代码执行的情况，这里简单记录下。</p>
+<h1 id="Kprobe"><a href="#Kprobe" class="headerlink" title="Kprobe"></a>Kprobe</h1><p>kprobe是一种内核的动态调试机制，可以在几乎所有内核代码上进行插桩，当执行到对应的代码时，先执行插桩函数，执行完毕后，在继续运行后续逻辑。它的实现逻辑基本上就是指令替换，将运行指令跳转到用户定义好的kprobe handler。</p>
+<p>上面说了是几乎所有内核代码，有几种场景无法正常kprobe：</p>
+<ul>
+<li>kprobe自身相关的代码：没法嵌套kprobe自身</li>
+<li>内联函数：内联函数在编译时会被展开到所有的调用处，kprobe实际上是根据符号对应的地址进行的，不能确认所有内联函数展开后的地址，这种情况需要计算内联函数的调用地址来进行kprobe</li>
+<li>一些被优化后的静态函数</li>
+</ul>
+<p>同时kprobe有两种实现形式：</p>
+<ul>
+<li>基于debugfs/ftrace的简易实现：对于一些简单场景，如获取函数参数，或者函数返回值的场景，可以直接使用</li>
+<li>基于内核模块的实现：可以实现一些复杂功能和逻辑，适用于复杂的场景</li>
+</ul>
+<h2 id="kprobe-based-on-ftrace"><a href="#kprobe-based-on-ftrace" class="headerlink" title="kprobe based on ftrace"></a>kprobe based on ftrace</h2><p>用户可以直接通过<code>/sys/kernel/debug/tracing/kprobe_events</code>添加kprobe，语法如下：</p>
+<blockquote>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br></pre></td><td class="code"><pre><span class="line"> p[:[GRP/][EVENT]] [MOD:]SYM[+offs]|MEMADDR [FETCHARGS]        : Set a probe</span><br><span class="line"> r[MAXACTIVE][:[GRP/][EVENT]] [MOD:]SYM[+0] [FETCHARGS]        : Set a return probe</span><br><span class="line"> p[:[GRP/][EVENT]] [MOD:]SYM[+0]%return [FETCHARGS]    : Set a return probe</span><br><span class="line"> -:[GRP/][EVENT]                                               : Clear a probe</span><br><span class="line"></span><br><span class="line">GRP            : Group name. If omitted, use &quot;kprobes&quot; for it.</span><br><span class="line">EVENT          : Event name. If omitted, the event name is generated</span><br><span class="line">                 based on SYM+offs or MEMADDR.</span><br><span class="line">MOD            : Module name which has given SYM.</span><br><span class="line">SYM[+offs]     : Symbol+offset where the probe is inserted.</span><br><span class="line">SYM%return     : Return address of the symbol</span><br><span class="line">MEMADDR        : Address where the probe is inserted.</span><br><span class="line">MAXACTIVE      : Maximum number of instances of the specified function that</span><br><span class="line">                 can be probed simultaneously, or 0 for the default value</span><br><span class="line">                 as defined in Documentation/trace/kprobes.rst section 1.3.1.</span><br><span class="line"></span><br><span class="line">FETCHARGS      : Arguments. Each probe can have up to 128 args.</span><br><span class="line"> %REG          : Fetch register REG</span><br><span class="line"> @ADDR         : Fetch memory at ADDR (ADDR should be in kernel)</span><br><span class="line"> @SYM[+|-offs] : Fetch memory at SYM +|- offs (SYM should be a data symbol)</span><br><span class="line"> $stackN       : Fetch Nth entry of stack (N &gt;= 0)</span><br><span class="line"> $stack        : Fetch stack address.</span><br><span class="line"> $argN         : Fetch the Nth function argument. (N &gt;= 1) (\*1)</span><br><span class="line"> $retval       : Fetch return value.(\*2)</span><br><span class="line"> $comm         : Fetch current task comm.</span><br><span class="line"> +|-[u]OFFS(FETCHARG) : Fetch memory at FETCHARG +|- OFFS address.(\*3)(\*4)</span><br><span class="line"> \IMM          : Store an immediate value to the argument.</span><br><span class="line"> NAME=FETCHARG : Set NAME as the argument name of FETCHARG.</span><br><span class="line"> FETCHARG:TYPE : Set TYPE as the type of FETCHARG. Currently, basic types</span><br><span class="line">                 (u8/u16/u32/u64/s8/s16/s32/s64), hexadecimal types</span><br><span class="line">                 (x8/x16/x32/x64), &quot;string&quot;, &quot;ustring&quot; and bitfield</span><br><span class="line">                 are supported.</span><br><span class="line"></span><br><span class="line"> (\*1) only for the probe on function entry (offs == 0).</span><br><span class="line"> (\*2) only for return probe.</span><br><span class="line"> (\*3) this is useful for fetching a field of data structures.</span><br><span class="line"> (\*4) &quot;u&quot; means user-space dereference. See :ref:`user_mem_access`.</span><br></pre></td></tr></table></figure>
+</blockquote>
+<p>当kprobe添加完成后，会生成对应的kprobe目录：<code>/sys/kernel/debug/tracing/events/kprobes/&lt;EVENT&gt;</code>，可以通过<code>/sys/kernel/debug/tracing/events/kprobes/&lt;EVENT&gt;/enable</code>去控制对应kprobe的启用禁用。</p>
+<p>官方示例（应该是32位的x86），对<code>do_sys_open</code>，可通过如下kprobe获取其参数：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">echo</span> <span class="string">&#x27;p:myprobe do_sys_open dfd=%ax filename=%dx flags=%cx mode=+4($stack)&#x27;</span> &gt; /sys/kernel/debug/tracing/kprobe_events</span><br></pre></td></tr></table></figure>
+
+<p>各个参数含义如下：</p>
+<ul>
+<li><code>p</code>：kprobe类型为kprobe</li>
+<li><code>myprobe</code>：event名称</li>
+<li><code>do_sys_open</code>：进行kprobe的函数名</li>
+<li><code>dfd=%ax filename=%dx flags=%cx mode=+4($stack)</code>：获取参数并输出，<code>%ax</code>、<code>%dx</code>、<code>%cx</code>和<code>+4($stack)</code>分别为寄存器名字和栈上偏移</li>
+</ul>
+<p>可通过如下kprobe获取返回值：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">echo</span> <span class="string">&#x27;r:myretprobe do_sys_open $retval&#x27;</span> &gt;&gt; /sys/kernel/debug/tracing/kprobe_events</span><br></pre></td></tr></table></figure>
+
+<p>各个参数含义如下：</p>
+<ul>
+<li><code>r</code>：kprobe类型为kretprobe</li>
+<li><code>myretprobe</code>：event名称</li>
+<li><code>do_sys_open</code>：进行kprobe的函数名</li>
+<li><code>$retval</code>：获取返回值并输出</li>
+</ul>
+<p>启用这两个kprobe：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">echo</span> 1 &gt; /sys/kernel/debug/tracing/events/kprobes/myprobe/<span class="built_in">enable</span></span><br><span class="line"><span class="built_in">echo</span> 1 &gt; /sys/kernel/debug/tracing/events/kprobes/myretprobe/<span class="built_in">enable</span></span><br></pre></td></tr></table></figure>
+
+<p>开启ftrace：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">echo</span> 1 &gt; /sys/kernel/debug/tracing/tracing_on</span><br></pre></td></tr></table></figure>
+
+<p>查看结果：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">cat /sys/kernel/debug/tracing/trace</span><br><span class="line"><span class="comment"># tracer: nop</span></span><br><span class="line"><span class="comment">#</span></span><br><span class="line"><span class="comment">#           TASK-PID    CPU#    TIMESTAMP  FUNCTION</span></span><br><span class="line"><span class="comment">#              | |       |          |         |</span></span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286875: myprobe: (do_sys_open+0x0/0xd6) dfd=3 filename=7fffd1ec4440 flags=8000 mode=0</span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286878: myretprobe: (sys_openat+0xc/0xe &lt;- do_sys_open) <span class="variable">$retval</span>=fffffffffffffffe</span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286885: myprobe: (do_sys_open+0x0/0xd6) dfd=ffffff9c filename=40413c flags=8000 mode=1b6</span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286915: myretprobe: (sys_open+0x1b/0x1d &lt;- do_sys_open) <span class="variable">$retval</span>=3</span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286969: myprobe: (do_sys_open+0x0/0xd6) dfd=ffffff9c filename=4041c6 flags=98800 mode=10</span><br><span class="line">           &lt;...&gt;-1447  [001] 1038282.286976: myretprobe: (sys_open+0x1b/0x1d &lt;- do_sys_open) <span class="variable">$retval</span>=3</span><br></pre></td></tr></table></figure>
+
+<p>详细使用方式可以参考：<a target="_blank" rel="noopener" href="https://www.kernel.org/doc/html/latest/trace/kprobetrace.html">Kprobe-based Event Tracing</a></p>
+<p>上面为直接在debugfs下操作，操作比较繁琐，也有一些现成的工具<a target="_blank" rel="noopener" href="https://github.com/iovisor/bpftrace">bpftrace</a>和<a target="_blank" rel="noopener" href="https://github.com/brendangregg/perf-tools/blob/master/kernel/kprobe">perf-tools</a>对debugfs下的操作进行了封装，可以简化操作步骤。</p>
+<h2 id="kprobe-module"><a href="#kprobe-module" class="headerlink" title="kprobe module"></a>kprobe module</h2><p>kprobe最原始的使用方式是编译一个内核模块，在模块内部进行kprobe的注册handler，在handler实现所需要的逻辑。</p>
+<p>这种方式提供了很强大的自由度，缺点就是使用难度较高，在一些需要复杂一点的逻辑的地方可以使用，<a target="_blank" rel="noopener" href="https://www.kernel.org/doc/Documentation/kprobes.txt">内核文档</a>对这种方式进行了详细说明。</p>
+<p>以上述排查ACK是否有被正常接收的问题为例，通过看代码可以确认，对应ACK处理函数为<code>tcp_ack</code>，参数中包含了<code>skb</code>，基于ftrace的kprobe可以获取到<code>skb</code>，甚至可以通过偏移获取到<code>skb</code>的成员，但问题在于，在一个正常的Linux环境，每秒处理的ACK太多了，这种kprobe没法精确过滤所需内容，所以需要自行编写过滤逻辑，并输出期望的内容。</p>
+<p>排查过程中用到的部分代码如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/module.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/kernel.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/kprobes.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;net/tcp.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">pre_tcp_ack</span><span class="params">(struct kprobe *p, struct pt_regs *regs)</span></span>;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">kprobe</span> <span class="title">kp_tcp_ack</span> =</span> &#123;</span><br><span class="line">	.symbol_name = <span class="string">&quot;tcp_ack&quot;</span>,</span><br><span class="line">	.pre_handler = pre_tcp_ack,</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">pre_tcp_ack</span><span class="params">(struct kprobe *p, struct pt_regs *regs)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sk_buff</span> *<span class="title">skb</span>;</span></span><br><span class="line">	<span class="keyword">int</span> flag;</span><br><span class="line"></span><br><span class="line">	skb = (struct sk_buff *)regs-&gt;si;</span><br><span class="line">	<span class="keyword">if</span> (!skb) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (tcp_hdr(skb)-&gt;source != htons(<span class="number">7001</span>) &amp;&amp; tcp_hdr(skb)-&gt;dest != htons(<span class="number">7001</span>)) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	flag = (<span class="keyword">int</span>)regs-&gt;dx;</span><br><span class="line">	printk(<span class="string">&quot;Get ACK: %u(%x) in tcp_ack(flag: %d).\n&quot;</span>, TCP_SKB_CB(skb)-&gt;ack_seq, TCP_SKB_CB(skb)-&gt;ack_seq, flag);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">int</span> <span class="title">init</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">if</span> (register_kprobe(&amp;kp_tcp_ack)) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	printk(<span class="string">&quot;trace-ack loaded.\n&quot;</span>);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">fini</span><span class="params">(<span class="keyword">void</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	unregister_kprobe(&amp;kp_tcp_ack);</span><br><span class="line"></span><br><span class="line">	printk(<span class="string">&quot;trace-ack unloaded.\n&quot;</span>);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">module_init(init);</span><br><span class="line">module_exit(fini);</span><br><span class="line">MODULE_LICENSE(<span class="string">&quot;GPL&quot;</span>);</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>可以看到整体逻辑非常简单，在<code>module_init</code>中通过<code>register_kprobe</code>注册kprobe，在<code>module_exit</code>中通过<code>unregister_kprobe</code>取消kprobe的注册。</p>
+<p><code>struct kprobe</code>定义如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">kprobe</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">hlist_node</span> <span class="title">hlist</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* list of kprobes for multi-handler support */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">list</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*count the number of times this probe was temporarily disarmed */</span></span><br><span class="line">	<span class="keyword">unsigned</span> <span class="keyword">long</span> nmissed;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* location of the probe point */</span></span><br><span class="line">	<span class="keyword">kprobe_opcode_t</span> *addr;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Allow user to indicate symbol name of the probe point */</span></span><br><span class="line">	<span class="keyword">const</span> <span class="keyword">char</span> *symbol_name;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Offset into the symbol */</span></span><br><span class="line">	<span class="keyword">unsigned</span> <span class="keyword">int</span> offset;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Called before addr is executed. */</span></span><br><span class="line">	<span class="keyword">kprobe_pre_handler_t</span> pre_handler;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Called after addr is executed, unless... */</span></span><br><span class="line">	<span class="keyword">kprobe_post_handler_t</span> post_handler;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * ... called if executing addr causes a fault (eg. page fault).</span></span><br><span class="line"><span class="comment">	 * Return 1 if it handled fault, otherwise kernel will see it.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">kprobe_fault_handler_t</span> fault_handler;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * ... called if breakpoint trap occurs in probe handler.</span></span><br><span class="line"><span class="comment">	 * Return 1 if it handled break, otherwise kernel will see it.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	<span class="keyword">kprobe_break_handler_t</span> break_handler;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Saved opcode (which has been replaced with breakpoint) */</span></span><br><span class="line">	<span class="keyword">kprobe_opcode_t</span> opcode;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* copy of the original instruction */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">arch_specific_insn</span> <span class="title">ainsn</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * Indicates various status flags.</span></span><br><span class="line"><span class="comment">	 * Protected by kprobe_mutex after this kprobe is registered.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	u32 flags;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>成员很多，通常只需关注<code>handler</code>和<code>symbol</code>：</p>
+<ul>
+<li>handler：对应事件发生时，所执行的函数</li>
+<li>symbol：需要probe的符号名，即函数名</li>
+</ul>
+<p>根据<code>symbol</code>在完成对应类型的<code>handler</code>编写，最后将kprobe注册到内核，即可正常工作。</p>
+<p>可以看到上面的例子中的<code>pre_handler</code>为<code>pre_tcp_ack</code>，在其内部先是获取到了<code>skb</code>，再根据端口号过滤掉不需要的<code>skb</code>，再输出TCP的<code>seq</code>和<code>ack</code>。</p>
+<p>使用<code>symbol</code>注册的kprobe只能在特定函数的入口/出口执行，<code>struct kprobe</code>还有成员<code>addr</code>和<code>offset</code>，可以用于精确指定probe的地址，但这种使用方式难度很大，获取所需参数时需要通过汇编代码确认对应的寄存器，再获取。而在函数入口的kprobe可以根据对应架构的传参规范通过对应寄存器直接获取，关于通过寄存器获取函数参数的方式，也可以参考<code>bpf_tracing.h</code>中的<code>PT_REGS_PARAM1</code>类似宏。</p>
+<h1 id="Systemtap"><a href="#Systemtap" class="headerlink" title="Systemtap"></a>Systemtap</h1><p><a target="_blank" rel="noopener" href="https://sourceware.org/systemtap/index.html">systemtap</a>是一个基于kprobe开发的动态调试工具，功能非常强大，有自己的脚本语言（完整语法规范参考<a target="_blank" rel="noopener" href="https://sourceware.org/systemtap/langref.pdf">SystemTap Language Reference</a>），可以通过编写systemtap脚本的方式，由systemtap生成对应的kprobe代码并加载到内核运行。这样用户的开发难度就大大降低了，不再需要懂内核编程，也不需要有内核编译环境。</p>
+<p>systemtap的安装使用在大多数的Linux发行版上都比较容易，直接通过对应的包管理工具安装即可，需要注意的是同时需要安装对应内核debuginfo，因为systemtap是通过vmlinux和debuginfo去确定probe点的。</p>
+<h2 id="无debuginfo使用systemtap"><a href="#无debuginfo使用systemtap" class="headerlink" title="无debuginfo使用systemtap"></a>无debuginfo使用systemtap</h2><p>对于没有debuginfo的生产环境是否可以使用systemtap呢？答案是可以的，但是要有目标环境对应的内核编译环境。</p>
+<p>因为systemtap的工作原理就是先生成内核模块再加载执行，我们可以把这两步分开，在编译环境上生成对应的内核模块，在目标环境上加载模块进行调试。</p>
+<p>以内核模块<code>xt_state</code>中的函数<code>state_mt</code>为例，首先查看对应的probe点，以及局部变量，注意使用<code>-r</code>指定内核代码路径：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#stap -r /home/kernel.rh8/ -L &#x27;module(&quot;xt_state&quot;).function(&quot;state_mt@net/netfilter/xt_state.c&quot;)&#x27;</span></span><br><span class="line">module(<span class="string">&quot;xt_state&quot;</span>).<span class="keyword">function</span>(<span class="string">&quot;state_mt@net/netfilter/xt_state.c:24&quot;</span>) <span class="variable">$skb</span>:struct sk_buff const* <span class="variable">$par</span>:struct xt_action_param* <span class="variable">$sinfo</span>:struct xt_state_info const*</span><br></pre></td></tr></table></figure>
+
+<p>可以将<code>function</code>换成<code>statement</code>，以将probe点指定到具体行：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#sed -n &#x27;23, 39p&#x27; /home/kernel.rh8/net/netfilter/xt_state.c</span></span><br><span class="line">static bool</span><br><span class="line">state_mt(const struct sk_buff *skb, struct xt_action_param *par)</span><br><span class="line">&#123;</span><br><span class="line">        const struct xt_state_info *sinfo = par-&gt;matchinfo;</span><br><span class="line">        enum ip_conntrack_info ctinfo;</span><br><span class="line">        unsigned int statebit;</span><br><span class="line">        struct nf_conn *ct = nf_ct_get(skb, &amp;ctinfo);</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (ct) /* line 31 */</span><br><span class="line">                statebit = XT_STATE_BIT(ctinfo);</span><br><span class="line">        <span class="keyword">else</span> <span class="keyword">if</span> (ctinfo == IP_CT_UNTRACKED)</span><br><span class="line">                statebit = XT_STATE_UNTRACKED;</span><br><span class="line">        <span class="keyword">else</span></span><br><span class="line">                statebit = XT_STATE_INVALID;</span><br><span class="line"></span><br><span class="line">        <span class="built_in">return</span> (sinfo-&gt;statemask &amp; statebit);</span><br><span class="line">&#125;</span><br><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#stap -r /home/kernel.rh8/ -L &#x27;module(&quot;xt_state&quot;).statement(&quot;*@net/netfilter/xt_state.c:31&quot;)&#x27;</span></span><br><span class="line">module(<span class="string">&quot;xt_state&quot;</span>).statement(<span class="string">&quot;state_mt@net/netfilter/xt_state.c:31&quot;</span>) <span class="variable">$skb</span>:struct sk_buff const* <span class="variable">$par</span>:struct xt_action_param* <span class="variable">$sinfo</span>:struct xt_state_info const* <span class="variable">$ctinfo</span>:enum ip_conntrack_info</span><br><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#stap -r /home/kernel.rh8/ -L &#x27;module(&quot;xt_state&quot;).statement(&quot;*@net/netfilter/xt_state.c:38&quot;)&#x27;</span></span><br><span class="line">module(<span class="string">&quot;xt_state&quot;</span>).statement(<span class="string">&quot;state_mt@net/netfilter/xt_state.c:38&quot;</span>) <span class="variable">$skb</span>:struct sk_buff const* <span class="variable">$par</span>:struct xt_action_param* <span class="variable">$sinfo</span>:struct xt_state_info const* <span class="variable">$statebit</span>:unsigned int</span><br></pre></td></tr></table></figure>
+
+<p>可以看到在不同的probe点，可以访问的局部变量也是不一样的，但是关于局部变量还有一点疑惑：以31行为例，其实应该是还能访问<code>statebit</code>和<code>ct</code>这两个变量的，但probe显示出来的变量并不包含这两个，可能是对变量做了一些优化，一些还没赋值的变量（<code>statebit</code>）和一些变量可以间接通过其他变量获取（<code>ct</code>）被优化掉了。</p>
+<p>编写如下systemtap脚本用于在<code>state_mt</code>内部输出<code>ctinfo</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Part 1: Global embedded C include */</span></span><br><span class="line">%&#123;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/netfilter/x_tables.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;linux/netfilter/xt_state.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;net/tcp.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">&lt;net/netfilter/nf_conntrack_core.h&gt;</span></span></span><br><span class="line">%&#125;</span><br><span class="line"><span class="comment">/* Part 1 end */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/* Part2: Embedded C function */</span></span><br><span class="line"><span class="function">function <span class="title">print_ctinfo</span> <span class="params">(skb, ctinfo)</span></span></span><br><span class="line"><span class="function">%</span>&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sk_buff</span> *<span class="title">skb</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">iphdr</span> *<span class="title">iph</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">tcphdr</span> *<span class="title">th</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">enum</span> <span class="title">ip_conntrack_info</span> <span class="title">ctinfo</span>;</span></span><br><span class="line"></span><br><span class="line">	skb = (struct sk_buff *)STAP_ARG_skb;</span><br><span class="line">	<span class="keyword">if</span> (!skb) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (skb-&gt;protocol != htons(ETH_P_IP)) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	iph = ip_hdr(skb);</span><br><span class="line">	<span class="keyword">if</span> (!iph) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (iph-&gt;protocol != IPPROTO_TCP) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	th = tcp_hdr(skb);</span><br><span class="line">	<span class="keyword">if</span> (!th) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (th-&gt;dest != htons(<span class="number">22</span>)) &#123;</span><br><span class="line">		STAP_RETURN();</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	ctinfo = STAP_ARG_ctinfo;</span><br><span class="line">	<span class="keyword">if</span> (printk_ratelimit()) &#123;</span><br><span class="line">		printk(<span class="string">&quot;[%s] Capture TCP packet: %hu.%hu.%hu.%hu:%hu-&gt;%hu.%hu.%hu.%hu:%hu with ctinfo: %d.\n&quot;</span>,</span><br><span class="line">			   __func__,</span><br><span class="line">			   iph-&gt;saddr &amp; <span class="number">0xff</span>, (iph-&gt;saddr &amp; <span class="number">0xff00</span>) &gt;&gt; <span class="number">8</span>, (iph-&gt;saddr &amp; <span class="number">0xff0000</span>) &gt;&gt; <span class="number">16</span>, (iph-&gt;saddr &amp; <span class="number">0xff000000</span>) &gt;&gt; <span class="number">24</span>,</span><br><span class="line">			   ntohs(th-&gt;source),</span><br><span class="line">			   iph-&gt;daddr &amp; <span class="number">0xff</span>, (iph-&gt;daddr &amp; <span class="number">0xff00</span>) &gt;&gt; <span class="number">8</span>, (iph-&gt;daddr &amp; <span class="number">0xff0000</span>) &gt;&gt; <span class="number">16</span>, (iph-&gt;daddr &amp; <span class="number">0xff000000</span>) &gt;&gt; <span class="number">24</span>,</span><br><span class="line">			   ntohs(th-&gt;dest),</span><br><span class="line">			   ctinfo);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	STAP_RETURN();</span><br><span class="line">%&#125;</span><br><span class="line"><span class="comment">/* Part 2 end */</span></span><br><span class="line"></span><br><span class="line"><span class="comment">/* Part 3: Probes */</span></span><br><span class="line"><span class="function">probe <span class="title">module</span><span class="params">(<span class="string">&quot;xt_state&quot;</span>)</span>.<span class="title">statement</span><span class="params">(<span class="string">&quot;state_mt@net/netfilter/xt_state.c:31&quot;</span>)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	print_ctinfo($skb, $ctinfo)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">probe begin</span><br><span class="line">&#123;</span><br><span class="line">	print(<span class="string">&quot;probe start.\n&quot;</span>)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">probe end</span><br><span class="line">&#123;</span><br><span class="line">	print(<span class="string">&quot;probe end.\n&quot;</span>)</span><br><span class="line">	<span class="built_in">exit</span>()</span><br><span class="line">&#125;</span><br><span class="line"><span class="comment">/* Part3 end */</span></span><br></pre></td></tr></table></figure>
+
+<p>脚本分为3部分：</p>
+<ul>
+<li>Part 1：嵌入的C代码的全局include，因为后续嵌入的C函数需要一些头文件，所以在开头定义好。</li>
+<li>Part 2：功能函数<code>print_ctinfo</code>，接受两个参数<code>skb</code>和<code>ctinfo</code>。</li>
+<li>Part 3：声明探测点probe</li>
+</ul>
+<p>Part 1和Part 2使用了嵌入C代码，关于嵌入C代码，有如下几个特点：</p>
+<ul>
+<li>最外层使用<code>%&#123;...%&#125;</code>这样的括号</li>
+<li>获取函数参数通过<code>STAP_ARG_</code>前缀加上参数名获取，如<code>STAP_ARG_skb</code></li>
+<li>函数内部使用<code>STAP_RETURN()</code>进行返回，参数不为空时可以为字符串或整数，和函数定义时的返回类型相同。</li>
+<li>函数内部使用<code>STAP_RETVALUE</code>作为返回值，可以为整数或字符串，字符串返回时需使用<code>snprintf</code>类似的函数为其赋值。</li>
+</ul>
+<p>Part 2中<code>print_ctinfo</code>内部通过参数获取到<code>skb</code>和<code>ctinfo</code>，并进行合法性检查，通过合法性检查后，直接通过<code>printk</code>输出<code>skb</code>和<code>ctinfo</code>相关的信息。</p>
+<p>Part 3中定义了3个probe，分别为<code>xt_state.c</code>第31行对应地址的probe，以及两个内建probe start 和end，分别在运行的开始和结束处调用。</p>
+<p>systemtap脚本编写完成后，即可使用<code>stap</code>命令编译对应的模块：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#stap -r /home/kernel.rh8 -DSTP_NO_OVERLOAD -DSTP_NO_VERREL_CHECK  -DSTP_NO_BUILDID_CHECK -v -p4 -m print_ctinfo.ko -g print_ctinfo.stp </span></span><br><span class="line">Truncating module name to <span class="string">&#x27;print_ctinfo&#x27;</span></span><br><span class="line">Pass 1: parsed user script and 484 library scripts using 155264virt/96900res/2956shr/93944data kb, <span class="keyword">in</span> 290usr/50sys/337real ms.</span><br><span class="line">Pass 2: analyzed script: 3 probes, 4 <span class="built_in">functions</span>, 1 embed, 0 globals using 157656virt/100236res/3944shr/96336data kb, <span class="keyword">in</span> 50usr/380sys/431real ms.</span><br><span class="line">Pass 3: translated to C into <span class="string">&quot;/tmp/stap7rcpFZ/print_ctinfo_src.c&quot;</span> using 157920virt/100756res/4216shr/96600data kb, <span class="keyword">in</span> 30usr/380sys/414real ms.</span><br><span class="line">print_ctinfo.ko</span><br><span class="line">Pass 4: compiled C into <span class="string">&quot;print_ctinfo.ko&quot;</span> <span class="keyword">in</span> 2270usr/760sys/2612real ms.</span><br><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#file print_ctinfo.ko </span></span><br><span class="line">print_ctinfo.ko: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), BuildID[sha1]=0xd1741342db5acb8c31f82e5684273aae24125c82, not stripped</span><br></pre></td></tr></table></figure>
+
+<p><code>stap</code>的执行一共有5个阶段，分别为：<code>parse</code>、<code>elaborate</code>、<code>translate</code>、<code>compile</code>和<code>run</code>，可以通过<code>-p</code>指定执行阶段。上述指定了<code>-p4</code>的命令最终编译出了可用的内核模块<code>print_ctinfo.ko</code>。</p>
+<p>在运行环境上，则可以直接通过<code>staprun</code>命令进行probe，该命令会自动加载模块，命令执行完成后，会自动卸载模块：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># ./staprun print_ctinfo.ko</span></span><br><span class="line">probe start.</span><br></pre></td></tr></table></figure>
+
+<p>此时观察内核日志，可以找到期望的输出，可以看到成功过滤了经过<code>state_mt</code>的SSH报文并且输出了相关信息：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">2022-12-08 17:37:07.614013 warning [kernel:] [171938.274058] [function___global_print_ctinfo__overload_0] Capture TCP packet: 172.23.9.13:7037-&gt;10.103.240.223:22 with ctinfo: 0.</span><br><span class="line">2022-12-08 17:37:07.623029 warning [kernel:] [171938.283066] [function___global_print_ctinfo__overload_0] Capture TCP packet: 10.103.241.85:51515-&gt;10.103.240.223:22 with ctinfo: 0.</span><br><span class="line">2022-12-08 17:37:07.623997 warning [kernel:] [171938.284053] [function___global_print_ctinfo__overload_0] Capture TCP packet: 172.23.9.13:7037-&gt;10.103.240.223:22 with ctinfo: 0.</span><br></pre></td></tr></table></figure>
+
+<p><code>stap</code>在运行过程中，会将生成的C代码放在临时目录，可以通过<code>-k</code>选项保留临时目录，然后查看对应的C代码。上述自定义函数<code>print_ctinfo</code>生成的目标C代码部分如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span> <span class="title">function___global_print_ctinfo__overload_0</span> <span class="params">(struct context* __restrict__ c)</span> </span>&#123;</span><br><span class="line">  __label__ deref_fault;</span><br><span class="line">  __label__ out;</span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">function___global_print_ctinfo__overload_0_locals</span> *  __<span class="title">restrict__</span> <span class="title">l</span> =</span> &amp; c-&gt;locals[c-&gt;nesting+<span class="number">1</span>].function___global_print_ctinfo__overload_0;</span><br><span class="line">  (<span class="keyword">void</span>) l;</span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> CONTEXT c</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> THIS l</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_ARG_skb THIS-&gt;l_skb</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_ARG_ctinfo THIS-&gt;l_ctinfo</span></span><br><span class="line">  c-&gt;last_stmt = <span class="string">&quot;identifier &#x27;print_ctinfo&#x27; at print_ctinfo.stp:8:10&quot;</span>;</span><br><span class="line">  <span class="keyword">if</span> (unlikely (c-&gt;nesting+<span class="number">1</span> &gt;= MAXNESTING)) &#123;</span><br><span class="line">    c-&gt;last_error = <span class="string">&quot;MAXNESTING exceeded&quot;</span>;</span><br><span class="line">    <span class="keyword">return</span>;</span><br><span class="line">  &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">    c-&gt;nesting ++;</span><br><span class="line">  &#125;</span><br><span class="line">  c-&gt;next = <span class="number">0</span>;</span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_NEXT do &#123; c-&gt;next = 1; goto out; &#125; while(0)</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_RETURN() do &#123; goto out; &#125; while(0)</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_PRINTF(fmt, ...) do &#123; _stp_printf(fmt, ##__VA_ARGS__); &#125; while (0)</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> STAP_ERROR(...) do &#123; snprintf(CONTEXT-&gt;error_buffer, MAXSTRINGLEN, __VA_ARGS__); CONTEXT-&gt;last_error = CONTEXT-&gt;error_buffer; goto out; &#125; while (0)</span></span><br><span class="line">  <span class="meta">#<span class="meta-keyword">define</span> return goto out</span></span><br><span class="line">  <span class="keyword">if</span> (c-&gt;actionremaining &lt; <span class="number">0</span>) &#123; c-&gt;last_error = <span class="string">&quot;MAXACTION exceeded&quot;</span>;<span class="keyword">goto</span> out; &#125;</span><br><span class="line">  &#123;</span><br><span class="line"></span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">sk_buff</span> *<span class="title">skb</span>;</span></span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">iphdr</span> *<span class="title">iph</span>;</span></span><br><span class="line">        <span class="class"><span class="keyword">struct</span> <span class="title">tcphdr</span> *<span class="title">th</span>;</span></span><br><span class="line">        <span class="class"><span class="keyword">enum</span> <span class="title">ip_conntrack_info</span> <span class="title">ctinfo</span>;</span></span><br><span class="line"></span><br><span class="line">        skb = (struct sk_buff *)STAP_ARG_skb;</span><br><span class="line">        <span class="keyword">if</span> (!skb) &#123;</span><br><span class="line">                STAP_RETURN();</span><br></pre></td></tr></table></figure>
+
+<p>可以看到一些在函数体内部使用的宏，如<code>STAP_RETURN</code>，在函数开头都有定义，生成的函数名<code>function___global_print_ctinfo__overload_0</code>也和内核日志中一致。</p>
+<p>除了内核函数的probe，systemtap还支持许多其他类型的probe，可通过<code>stap --dump-probe-types</code>查看：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">[root@docker &lt;bca7e9fa6017&gt; /home ]<span class="comment">#stap -r /home/kernel.rh8 --dump-probe-types</span></span><br><span class="line">......</span><br><span class="line">netfilter.hook(string).pf(string)</span><br><span class="line">netfilter.hook(string).pf(string).priority(string)</span><br><span class="line">netfilter.pf(string).hook(string)</span><br><span class="line">netfilter.pf(string).hook(string).priority(string)</span><br><span class="line">......</span><br><span class="line">process(string).begin</span><br><span class="line">process(string).end</span><br><span class="line">......</span><br><span class="line">procfs(string).<span class="built_in">read</span></span><br><span class="line">procfs(string).read.maxsize(number)</span><br><span class="line">......</span><br><span class="line">python2.module(string).<span class="keyword">function</span>(string)</span><br><span class="line">python2.module(string).<span class="keyword">function</span>(string).call</span><br><span class="line">python2.module(string).<span class="keyword">function</span>(string).<span class="built_in">return</span></span><br><span class="line">python3.module(string).<span class="keyword">function</span>(string)</span><br><span class="line">python3.module(string).<span class="keyword">function</span>(string).call</span><br><span class="line">python3.module(string).<span class="keyword">function</span>(string).<span class="built_in">return</span></span><br><span class="line">......</span><br><span class="line">timer.hz(number)</span><br><span class="line">timer.jiffies(number)</span><br><span class="line">timer.jiffies(number).randomize(number)</span><br></pre></td></tr></table></figure>
+
+<p>包含了许多针对特定场景的probe，包括对用户态的进程、python模块等。</p>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/21/Record-of-using-kprobe/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Other/" rel="tag">Other</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+      <a href="/2023/01/21/Linux-kernel-checksum-calculation-and-skb-ip-summed/" class="article-nav-link">
+        <strong class="article-nav-caption">上一篇</strong>
+        <div class="article-nav-title">
+          
+            Linux kernel checksum calculation and skb-&gt;ip_summed
+          
+        </div>
+      </a>
+    
+    
+      <a href="/2023/01/21/A-multiplication-overflow-problem/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">A multiplication overflow problem</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>
