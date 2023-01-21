@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>Instance lock of shell script |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-Instance-lock-of-shell-script"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  Instance lock of shell script
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/Instance-lock-of-shell-script/" class="article-date">
+  <time datetime="2023-01-21T15:20:23.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">2.3k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">8 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p>有时候使用shell实现的业务逻辑中，需要确保单实例运行，避免并发执行影响原有逻辑。</p>
+<p>虽然shell理论上不太适合特别重的、复杂的业务，不过需要实例锁的情况还是存在的，有需求就要有对应的实现。</p>
+<span id="more"></span>
+
+<p>有位前辈说：“所有的单实例锁都是基于文件实现的。”，想了想，要在不同实例间共享一个锁，文件确实应该是一个最简便的方法。在网上看了下现有的实现，也基本上是基于文件的。</p>
+<p>shell的文件锁，基本可以分为两大类：自行实现或使用现有工具如flock。</p>
+<h1 id="自行实现的文件锁"><a href="#自行实现的文件锁" class="headerlink" title="自行实现的文件锁"></a>自行实现的文件锁</h1><p>自行实现的文件锁基本上都是通过创建一个文件或者目录，在不同脚本实例间通过访问同一个文件或目录，用文件状态实现锁逻辑。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Simple file lock.</span></span><br><span class="line"><span class="function"><span class="title">lock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	mkdir <span class="variable">$&#123;LOCK&#125;</span> || <span class="built_in">return</span> 1</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">unlock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	rm -rf <span class="variable">$&#123;LOCK&#125;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>上述简单锁实现中，加锁流程中通过<code>mkdir</code>创建一个锁目录，当其他实例加锁时，由于锁目录已经存在，<code>mkdir</code>会返回错误，即可认为加锁失败；释放锁流程中通过直接删除目录完成解锁，当下一次获取锁时可以成功创建。</p>
+<p>通过<code>mkdir</code>实现的好处在于加锁操作是原子的，且<code>mkdir</code>在目录存在时会直接返回错误。但有几个明显问题：</p>
+<ul>
+<li>锁目录的父目录必须存在，否则mkdir会失败；</li>
+<li>持有锁时如果脚本出现异常终止，如收到了特定信号，或设备宕机，无法释放锁；</li>
+<li>多个实例之间必须对锁所在目录相互可见，如脚本可能在多容器场景下执行，需要处理目录共享的问题；</li>
+<li>锁所在目录须有足够的inode支持锁的创建；</li>
+<li>脚本须有对应权限创建锁。</li>
+</ul>
+<p>通常情况下会选择将锁放在<code>/run</code>之类的公共tmpfs中，一个原因是符合其使用场景，另一个原因是遇到设备宕机这种场景，锁会随着系统重启自动释放。</p>
+<p>但这都不是主要的，最重要的是非宕机场景下的脚本异常终止锁如何释放。加锁容易释放难，锁相关的问题最怕的除了竞争导致死锁外，就是这类锁没有按照预期释放的问题。</p>
+<p>通常情况下会使用<code>trap</code>来处理脚本收到的信号：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># Trap signals.</span></span><br><span class="line"><span class="built_in">trap</span> unlock EXIT</span><br></pre></td></tr></table></figure>
+
+<p>这在大多数场景下是有用的，但其无法处理SIGKILL，当脚本被SIGKILL终止时，无法释放锁。这也是基于文件存在与否的锁实现最致命的问题，所以在我看来这是一种不可靠的加锁方式。</p>
+<h1 id="flock"><a href="#flock" class="headerlink" title="flock"></a>flock</h1><p>flock也是一种流行的shell实例锁实现，它本身也依赖于一个特定的锁文件，但与上述判断文件存在与否的锁实现不同，flock只是需要持有一个锁文件的句柄，当flock进程退出，即便是意外的、被动的退出，也可以释放句柄，即释放锁，所以可以解决上述异常退出无法释放锁的问题。</p>
+<p>但即便如此，还是flock有一些局限性，最大的问题就是shell的fd继承问题：</p>
+<p>在锁保护下执行的命令，都会继承锁文件的fd，这就对执行的命令有一定的要求，需要保证脚本正常、异常流程中，不会由于某条命令还在执行，导致持有fd，锁无法释放的问题。所以要么对代码进行严格要求，要么在执行的代码中关闭对应的fd，不过两种方式都是相对麻烦的。</p>
+<p>其实flock提供了参数<code>-o, --close</code>，用于在执行对应的命令之前，关闭锁fd。以这种模式运行的flock，会独立出一个flock进程，同时锁fd由flock进程持有，其他在锁保护下执行的命令将不会继承锁fd。但它的问题在于，flock进程和子进程没有亲缘关系，当flock进程终止时，子进程不受影响，这样其实锁就失效了。</p>
+<p>关于如何解决fd继承的问题，如果可以确保代码执行的可靠性，或在执行的代码中主动关闭继承的fd，flock是可以应对绝大多数场景的。不过仔细思考一下，shell可能本身就不适合实现这种可靠性要求较高的逻辑，毕竟连设置子进程不继承fd都无法做到。</p>
+<h1 id="基于实例pid的实例锁"><a href="#基于实例pid的实例锁" class="headerlink" title="基于实例pid的实例锁"></a>基于实例pid的实例锁</h1><p>除了上述基于文件的锁以外，还可以直接通过pid去判断是否有其他实例正在运行，最直接的办法就是通过<code>ps</code>、<code>pidof</code>或<code>pgrep</code>之类的命令，去获取进程的pid。</p>
+<p>但是现有的简单获取pid的方式都有一定问题，如一般脚本的进程名就是脚本名，但是如果脚本被改名，或者通过链接执行，就很可能出现同一实例但command line不同的问题，此时通过进程名去获取pid，是不完备的。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">ln -sfT f.sh f2.sh</span><br><span class="line">./f.sh</span><br><span class="line">./f2.sh</span><br><span class="line"><span class="comment"># Can&#x27;t get pid of f2.sh.</span></span><br><span class="line">pgrep -f f.sh</span><br></pre></td></tr></table></figure>
+
+<p>为了解决这个问题，一个简单的做法是实例启动之前将自身pid写入一个文件，需要获取实例pid的时候，从pid文件获取。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">PIDFILE=/run/instance.pid</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">lock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	[ -s <span class="variable">$&#123;PIDFILE&#125;</span> ] &amp;&amp; [ -d <span class="string">&quot;/proc/<span class="subst">$(cat $&#123;PIDFILE&#125;)</span>&quot;</span> ] &amp;&amp; <span class="built_in">return</span> 1</span><br><span class="line">	<span class="built_in">echo</span> $$ &gt; <span class="variable">$&#123;PIDFILE&#125;</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">unlock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	&gt; <span class="variable">$&#123;PIDFILE&#125;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>但即便像上面一样保证了pid文件内容的正确性，也不能保证锁机制的完备，因为pid可能被复用。</p>
+<p>一个极端的场景：第一个实例运行并将当前pid写入文件，在解锁之前异常退出了，此时pid文件并没有清理。随后一个正常的其他进程启动，并复用了第一个实例运行时相同的pid。当后续实例启动时，检查有对应进程正在使用该pid，认为有实例正在运行，加锁失败，导致无法正常运行。</p>
+<p>即，pid复用会导致这种实现下的锁无法释放。</p>
+<p>对此，我思考了一种改进方案：既然pid复用的场景可能会导致锁无法释放，那只要再检查一下此pid是不是彼pid即可，通过一些额外信息，避免pid复用造成的锁无法释放问题。</p>
+<p>至于额外信息，需要是能够确认进程唯一性的。查看了一下<a target="_blank" rel="noopener" href="https://man7.org/linux/man-pages/man5/proc.5.html">man proc</a>，决定选用进程的启动时间来唯一确定一个进程。</p>
+<blockquote>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">/proc/[pid]/stat</span><br><span class="line">       Status information about the process.  This is used by</span><br><span class="line">       ps(1).  It is defined in the kernel source file</span><br><span class="line">       fs/proc/array.c.</span><br><span class="line">.....</span><br><span class="line">       (22) starttime  %llu</span><br><span class="line">              The time the process started after system boot.  In</span><br><span class="line">              kernels before Linux 2.6, this value was expressed</span><br><span class="line">              in jiffies.  Since Linux 2.6, the value is</span><br><span class="line">              expressed in clock ticks (divide by</span><br><span class="line">              sysconf(_SC_CLK_TCK)).</span><br><span class="line"></span><br><span class="line">              The format for this field was %lu before Linux 2.6.</span><br></pre></td></tr></table></figure>
+</blockquote>
+<p>pid对应的stat下，记录了进程的starttime，在2.6版本以上的内核中，starttime为进程启动到系统启动之间经过的时钟周期。</p>
+<p>对于进程，可以做一个合理假设：使用同一个pid的不同进程，不会有相同的starttime。即在给定pid的情况下，该pid对于的starttime可以确定是否发生了pid复用。</p>
+<p>据此，改进后的锁实现为：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">PIDFILE=/run/instance.pid</span><br><span class="line">LOCKFILE=/run/.lock</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">lock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	<span class="built_in">local</span> pid</span><br><span class="line">	<span class="built_in">local</span> starttime</span><br><span class="line"></span><br><span class="line">	(</span><br><span class="line">		flock -s 200</span><br><span class="line">		pid=$(cat <span class="variable">$&#123;<span class="variable">$&#123;PIDFILE&#125;</span>&#125;</span> | awk <span class="string">&#x27;&#123;print $1&#125;&#x27;</span>)</span><br><span class="line">		starttime=$(cat <span class="variable">$&#123;<span class="variable">$&#123;PIDFILE&#125;</span>&#125;</span> | awk <span class="string">&#x27;&#123;print $2&#125;&#x27;</span>)</span><br><span class="line"></span><br><span class="line">		[ -n <span class="string">&quot;<span class="variable">$&#123;pid&#125;</span>&quot;</span> -a -n <span class="string">&quot;<span class="variable">$&#123;starttime&#125;</span>&quot;</span> ] &amp;&amp; [ <span class="string">&quot;<span class="variable">$&#123;starttime&#125;</span>&quot;</span> = <span class="string">&quot;<span class="subst">$(cat /proc/$&#123;pid&#125;/stat | awk &#x27;&#123;print $22&#125;&#x27;)</span>&quot;</span> ] &amp;&amp; <span class="built_in">return</span> 1</span><br><span class="line"></span><br><span class="line">		<span class="built_in">echo</span> <span class="string">&quot;$$ <span class="subst">$(cat /proc/$$/stat | awk &#x27;&#123;print $22&#125;&#x27;)</span>&quot;</span> &gt; <span class="variable">$&#123;PIDFILE&#125;</span></span><br><span class="line">	) 200 &lt;&gt; <span class="variable">$&#123;LOCKFILE&#125;</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="title">unlock</span></span>()</span><br><span class="line">&#123;</span><br><span class="line">	&gt; <span class="variable">$&#123;PIDFILE&#125;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>加锁时，将自身进程pid和starttime写入pid文件。当pid文件中对应pid正在被使用，且starttime和文件中记录一致时，认为加锁失败。由于加锁的过程不原子，使用flock保护对pid文件的写入过程。</p>
+<p>释放锁时，直接清空pid文件即可。</p>
+<p>对于异常场景：</p>
+<ul>
+<li>pid文件写入失败：无解，任何需要写入文件实现的锁都需要保证足够的空间和inode，即便只需要几个字节；</li>
+<li>pid字段写入过程中进程异常终止且pid被复用：此时不存在starttime字段，不满足<code>[ -n &quot;$&#123;pid&#125;&quot; -a -n &quot;$&#123;starttime&#125;&quot; ]</code>，可以正常加锁；</li>
+<li>starttime字段写入过程中进程异常终止且pid被复用：可以认为starttime字段不完整或异常，不满足<code>[ &quot;$&#123;starttime&#125;&quot; = &quot;$(cat /proc/$&#123;pid&#125;/stat | awk &#39;&#123;print $22&#125;&#39;)&quot; ]</code>，可以正常加锁；</li>
+<li>释放锁之前进程异常终止且pid被复用：pid被复用后的进程starttime和文件内记录的不同，不满足<code>[ &quot;$&#123;starttime&#125;&quot; = &quot;$(cat /proc/$&#123;pid&#125;/stat | awk &#39;&#123;print $22&#125;&#39;)&quot; ]</code>，可以正常加锁。</li>
+</ul>
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/21/Instance-lock-of-shell-script/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/linux/" rel="tag">linux</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+    
+      <a href="/2023/01/21/Record-of-learning-AF-XDP/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">Record of learning AF_XDP</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>

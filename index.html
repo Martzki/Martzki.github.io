@@ -203,6 +203,64 @@
 
     
     <article
+  id="post-Instance-lock-of-shell-script"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h2 itemprop="name">
+  <a class="article-title" href="/2023/01/21/Instance-lock-of-shell-script/"
+    >Instance lock of shell script</a> 
+</h2>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/21/Instance-lock-of-shell-script/" class="article-date">
+  <time datetime="2023-01-21T15:20:23.000Z" itemprop="datePublished">2023-01-21</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+   
+    </div>
+      
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p>有时候使用shell实现的业务逻辑中，需要确保单实例运行，避免并发执行影响原有逻辑。</p>
+<p>虽然shell理论上不太适合特别重的、复杂的业务，不过需要实例锁的情况还是存在的，有需求就要有对应的实现。</p> 
+      <a class="article-more-link" href="/2023/01/21/Instance-lock-of-shell-script/"
+        >Read more</a
+      >
+       
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <footer class="article-footer">
+       
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/linux/" rel="tag">linux</a></li></ul>
+
+    </footer>
+  </div>
+
+    
+ 
+    
+</article>
+
+    
+    <article
   id="post-Record-of-learning-AF-XDP"
   class="article article-type-post"
   itemscope
@@ -659,65 +717,6 @@
     <footer class="article-footer">
        
   <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Travel/" rel="tag">Travel</a></li></ul>
-
-    </footer>
-  </div>
-
-    
- 
-    
-</article>
-
-    
-    <article
-  id="post-Virtio-feature-negotiation-from-QEMU-perspective"
-  class="article article-type-post"
-  itemscope
-  itemprop="blogPost"
-  data-scroll-reveal
->
-  <div class="article-inner">
-    
-    <header class="article-header">
-       
-<h2 itemprop="name">
-  <a class="article-title" href="/2022/02/06/Virtio-feature-negotiation-from-QEMU-perspective/"
-    >Virtio feature negotiation from QEMU perspective</a> 
-</h2>
- 
-
-      
-    </header>
-     
-    <div class="article-meta">
-      <a href="/2022/02/06/Virtio-feature-negotiation-from-QEMU-perspective/" class="article-date">
-  <time datetime="2022-02-06T15:22:34.000Z" itemprop="datePublished">2022-02-06</time>
-</a> 
-  <div class="article-category">
-    <a class="article-category-link" href="/categories/Technology/">Technology</a>
-  </div>
-   
-    </div>
-      
-    <div class="article-entry" itemprop="articleBody">
-       
-  <h1 id="QEMU中的Virtio-features协商流程"><a href="#QEMU中的Virtio-features协商流程" class="headerlink" title="QEMU中的Virtio features协商流程"></a>QEMU中的Virtio features协商流程</h1><p>下面以virtio-net对接vhost-net（kernel）为例，分析整个Virtio features协商的过程。</p>
-<h2 id="vhost-net"><a href="#vhost-net" class="headerlink" title="vhost-net"></a>vhost-net</h2><p>vhost_net作为描述后端的数据结构，与真正使用的后端（vhost_user or vhost_net）对应。<br>每个vhost_net包含一个vhost_dev，vhost_net的features实际就是vhost_dev的features，与features相关的成员有：<code>features</code>，<code>acked_features</code>，<code>backend_features</code>和<code>protocol_features</code>：</p>
-<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_net</span> &#123;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> <span class="title">dev</span>;</span></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">vhost_virtqueue</span> <span class="title">vqs</span>[2];</span></span><br><span class="line">    <span class="keyword">int</span> backend;</span><br><span class="line">    NetClientState *nc;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">vhost_dev</span> &#123;</span></span><br><span class="line">……</span><br><span class="line">    <span class="keyword">uint64_t</span> features;</span><br><span class="line">    <span class="keyword">uint64_t</span> acked_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> backend_features;</span><br><span class="line">    <span class="keyword">uint64_t</span> protocol_features;</span><br><span class="line">……</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure> 
-      <a class="article-more-link" href="/2022/02/06/Virtio-feature-negotiation-from-QEMU-perspective/"
-        >Read more</a
-      >
-       
-      <!-- reward -->
-      
-    </div>
-    
-
-    <!-- copyright -->
-    
-    <footer class="article-footer">
-       
-  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Virtio-Vhost/" rel="tag">Virtio&#x2F;Vhost</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Virtualization/" rel="tag">Virtualization</a></li></ul>
 
     </footer>
   </div>
