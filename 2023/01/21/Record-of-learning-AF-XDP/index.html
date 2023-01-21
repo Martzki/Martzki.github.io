@@ -111,6 +111,7 @@
        
   <h1 id="Preface"><a href="#Preface" class="headerlink" title="Preface"></a>Preface</h1><p>近年eBPF技术大火，在网络方向上最火的大概就是cilium和XDP了，前者是一个前景非常广阔的CNI，后者是内核里基于eBPF的一个包处理框架。</p>
 <p>关于eBPF或XDP，网上有很多介绍文章，这里不会去详细介绍其基础原理，只记录下学习过程中遇到的问题以及对应代码。</p>
+<span id="more"></span>
 <p><code>AF_XDP</code>是内核基于XDP的一层socket封装，和<code>AF_INET</code>、<code>AF_PACKET</code>一样，是一种协议族，可以直接通过socket相关调用去使用。</p>
 <p>XDP相关实现的封装层次从低到高为：<code>eBPF</code>-&gt;<code>XDP</code>-&gt;<code>AF_XDP</code>-&gt;<code>libbpf</code>-&gt;<code>APP</code>。</p>
 <p><code>AF_XDP</code>相关的代码主要分为三部分：</p>
