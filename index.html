@@ -203,6 +203,65 @@
 
     
     <article
+  id="post-Introduce-of-librte-ikcp"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h2 itemprop="name">
+  <a class="article-title" href="/2023/01/24/Introduce-of-librte-ikcp/"
+    >Introduce of librte_ikcp</a> 
+</h2>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/24/Introduce-of-librte-ikcp/" class="article-date">
+  <time datetime="2023-01-24T05:32:17.000Z" itemprop="datePublished">2023-01-24</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+   
+    </div>
+      
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p><code>KCP</code><a target="_blank" rel="noopener" href="https://github.com/skywind3000/kcp">^1</a>是一个纯算法实现的ARQ协议，而<code>librte_ikcp</code><a target="_blank" rel="noopener" href="https://github.com/Martzki/dpdk-kcp">^2</a>是我实现的一个基于<code>KCP</code>的<code>DPDK</code>接口风格的封装库。</p>
+<p>开发这个封装库的动机源于产品需求。我们的平台是基于<code>DPDK</code>实现的用户态转发面，是不包含协议栈的。一个需求需要确保数据跨节点传输的可靠性，原始实现中使用了UDP进行数据传输，但无法确保其可靠性。</p>
+<p>为了解决这个问题，研究了下基于UDP的可靠传输实现，发现大多数的实现都是基于Linux协议栈，在socket层上进行的封装，如<code>UDT</code><a target="_blank" rel="noopener" href="https://udt.sourceforge.io/doc.html">^3</a>，这类实现在我们的应用场景不是很适用。后面发现了<code>KCP</code>，它自身实现了ARQ，对报文/消息的输入输出，提供了回调接口，其本身只关注自身状态维护，不关心数据收发的具体实现，可以是UDP socket，也可以是基于<code>DPDK</code>收发包接口的更上一层封装。很显然，这样的实现方式，利于在<code>DPDK</code>应用中实现UDP的可靠传输。</p> 
+      <a class="article-more-link" href="/2023/01/24/Introduce-of-librte-ikcp/"
+        >Read more</a
+      >
+       
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <footer class="article-footer">
+       
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/dpdk/" rel="tag">dpdk</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/network/" rel="tag">network</a></li></ul>
+
+    </footer>
+  </div>
+
+    
+ 
+    
+</article>
+
+    
+    <article
   id="post-Instance-lock-of-shell-script"
   class="article article-type-post"
   itemscope
@@ -660,63 +719,6 @@
     <footer class="article-footer">
        
   <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/For-Fun/" rel="tag">For Fun</a></li></ul>
-
-    </footer>
-  </div>
-
-    
- 
-    
-</article>
-
-    
-    <article
-  id="post-Travel-in-Hangzhou-in-2021"
-  class="article article-type-post"
-  itemscope
-  itemprop="blogPost"
-  data-scroll-reveal
->
-  <div class="article-inner">
-    
-    <header class="article-header">
-       
-<h2 itemprop="name">
-  <a class="article-title" href="/2022/02/07/Travel-in-Hangzhou-in-2021/"
-    >Travels of Martzki: Travel in Hangzhou in 2021</a> 
-</h2>
- 
-
-      
-    </header>
-     
-    <div class="article-meta">
-      <a href="/2022/02/07/Travel-in-Hangzhou-in-2021/" class="article-date">
-  <time datetime="2022-02-07T12:46:05.000Z" itemprop="datePublished">2022-02-07</time>
-</a> 
-  <div class="article-category">
-    <a class="article-category-link" href="/categories/Travel/">Travel</a>
-  </div>
-   
-    </div>
-      
-    <div class="article-entry" itemprop="articleBody">
-       
-  <p>2021年的清明节假期，是我的第一次杭州旅行。一是想体验下杭州的清明时节，欣赏下西湖美景；二是亲身感受下杭州作为一线IT城市的氛围。  </p> 
-      <a class="article-more-link" href="/2022/02/07/Travel-in-Hangzhou-in-2021/"
-        >Read more</a
-      >
-       
-      <!-- reward -->
-      
-    </div>
-    
-
-    <!-- copyright -->
-    
-    <footer class="article-footer">
-       
-  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/Travel/" rel="tag">Travel</a></li></ul>
 
     </footer>
   </div>

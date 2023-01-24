@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+  
+
+    <head>
+      <meta charset="utf-8" />
+        
+      <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1"
+      />
+      <title>Introduce of librte_ikcp |  Lost Stars</title>
+  <meta name="generator" content="hexo-theme-ayer">
+      
+      <link rel="shortcut icon" href="/images/avatar.JPG" />
+       
+<link rel="stylesheet" href="/dist/main.css">
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/css/remixicon.min.css"
+      />
+      
+<link rel="stylesheet" href="/css/custom.css">
+ 
+      <script src="https://cdn.jsdelivr.net/npm/pace-js@1.0.2/pace.min.js"></script>
+       
+ 
+
+      <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@sweetalert2/theme-bulma@5.0.1/bulma.min.css"
+      />
+      <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11.0.19/dist/sweetalert2.min.js"></script>
+
+      <!-- mermaid -->
+      
+      <style>
+        .swal2-styled.swal2-confirm {
+          font-size: 1.6rem;
+        }
+      </style>
+    </head>
+  </html>
+</html>
+
+
+<body>
+  <div id="app">
+    
+      
+    <main class="content on">
+      <section class="outer">
+  <article
+  id="post-Introduce-of-librte-ikcp"
+  class="article article-type-post"
+  itemscope
+  itemprop="blogPost"
+  data-scroll-reveal
+>
+  <div class="article-inner">
+    
+    <header class="article-header">
+       
+<h1 class="article-title sea-center" style="border-left:0" itemprop="name">
+  Introduce of librte_ikcp
+</h1>
+ 
+
+      
+    </header>
+     
+    <div class="article-meta">
+      <a href="/2023/01/24/Introduce-of-librte-ikcp/" class="article-date">
+  <time datetime="2023-01-24T05:32:17.000Z" itemprop="datePublished">2023-01-24</time>
+</a> 
+  <div class="article-category">
+    <a class="article-category-link" href="/categories/Technology/">Technology</a>
+  </div>
+  
+<div class="word_count">
+    <span class="post-time">
+        <span class="post-meta-item-icon">
+            <i class="ri-quill-pen-line"></i>
+            <span class="post-meta-item-text"> Word count:</span>
+            <span class="post-count">2.7k</span>
+        </span>
+    </span>
+
+    <span class="post-time">
+        &nbsp; | &nbsp;
+        <span class="post-meta-item-icon">
+            <i class="ri-book-open-line"></i>
+            <span class="post-meta-item-text"> Reading time≈</span>
+            <span class="post-count">12 min</span>
+        </span>
+    </span>
+</div>
+ 
+    </div>
+      
+    <div class="tocbot"></div>
+
+
+
+
+  
+    <div class="article-entry" itemprop="articleBody">
+       
+  <h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p><code>KCP</code><a target="_blank" rel="noopener" href="https://github.com/skywind3000/kcp">^1</a>是一个纯算法实现的ARQ协议，而<code>librte_ikcp</code><a target="_blank" rel="noopener" href="https://github.com/Martzki/dpdk-kcp">^2</a>是我实现的一个基于<code>KCP</code>的<code>DPDK</code>接口风格的封装库。</p>
+<p>开发这个封装库的动机源于产品需求。我们的平台是基于<code>DPDK</code>实现的用户态转发面，是不包含协议栈的。一个需求需要确保数据跨节点传输的可靠性，原始实现中使用了UDP进行数据传输，但无法确保其可靠性。</p>
+<p>为了解决这个问题，研究了下基于UDP的可靠传输实现，发现大多数的实现都是基于Linux协议栈，在socket层上进行的封装，如<code>UDT</code><a target="_blank" rel="noopener" href="https://udt.sourceforge.io/doc.html">^3</a>，这类实现在我们的应用场景不是很适用。后面发现了<code>KCP</code>，它自身实现了ARQ，对报文/消息的输入输出，提供了回调接口，其本身只关注自身状态维护，不关心数据收发的具体实现，可以是UDP socket，也可以是基于<code>DPDK</code>收发包接口的更上一层封装。很显然，这样的实现方式，利于在<code>DPDK</code>应用中实现UDP的可靠传输。</p>
+<span id="more"></span>
+
+<h1 id="How-to-use-KCP"><a href="#How-to-use-KCP" class="headerlink" title="How to use KCP"></a>How to use KCP</h1><p><code>KCP</code>的使用分为初始化和具体的使用部分。</p>
+<h2 id="KCP-initialization"><a href="#KCP-initialization" class="headerlink" title="KCP initialization"></a>KCP initialization</h2><p>对于<code>KCP</code>而言，首先需要调用<code>ikcp_create</code>创建<code>ikcp</code>实例：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// create a new kcp control object, &#x27;conv&#x27; must equal in two endpoint</span></span><br><span class="line"><span class="comment">// from the same connection. &#x27;user&#x27; will be passed to the output callback</span></span><br><span class="line"><span class="comment">// output callback can be setup like this: &#x27;kcp-&gt;output = my_udp_output&#x27;</span></span><br><span class="line"><span class="function">ikcpcb* <span class="title">ikcp_create</span><span class="params">(IUINT32 conv, <span class="keyword">void</span> *user)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p>其中，<code>conv</code>是会话的唯一标识符，对同一个会话，通信的双方需要使用相同的<code>conv</code>进行通信；<code>user</code>是传递给发送回调的参数。</p>
+<p>然后再设置底层发送函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// set output callback, which will be invoked by kcp</span></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">ikcp_setoutput</span><span class="params">(ikcpcb *kcp, <span class="keyword">int</span> (*output)(<span class="keyword">const</span> <span class="keyword">char</span> *buf, <span class="keyword">int</span> len, </span></span></span><br><span class="line"><span class="params"><span class="function">	ikcpcb *kcp, <span class="keyword">void</span> *user))</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p>每一个<code>ikcp</code>实例对应了一个底层发送函数，在<code>KCP</code>的状态机维护中，在需要时，会调用底层的发送函数发出。</p>
+<h2 id="KCP-FSM-update"><a href="#KCP-FSM-update" class="headerlink" title="KCP FSM update"></a>KCP FSM update</h2><p>上述初始化完成后，即可周期性调用<code>ikcp_update</code>来维护<code>KCP</code>自身状态机：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// update state (call it repeatedly, every 10ms-100ms), or you can ask </span></span><br><span class="line"><span class="comment">// ikcp_check when to call it again (without ikcp_input/_send calling).</span></span><br><span class="line"><span class="comment">// &#x27;current&#x27; - current timestamp in millisec. </span></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">ikcp_update</span><span class="params">(ikcpcb *kcp, IUINT32 current)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>ikcp_update</code>会根据<code>KCP</code>自身信息，进行收发队列的维护，实现序号确认、丢失重传以及流控等功能。</p>
+<h2 id="KCP-TX"><a href="#KCP-TX" class="headerlink" title="KCP TX"></a>KCP TX</h2><p><code>KCP</code>给上层应用提供了发送接口<code>ikcp_send</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// user/upper level send, returns below zero for error</span></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">ikcp_send</span><span class="params">(ikcpcb *kcp, <span class="keyword">const</span> <span class="keyword">char</span> *buffer, <span class="keyword">int</span> len)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p><code>ikcp_send</code>的实际作用是将上层应用提供的数据存入<code>KCP</code>内部的发送队列，并不会直接调用上述设置好的底层的发送函数。在<code>KCP</code>自身状态机维护的过程中，在合适的时机<code>KCP</code>会从发送队列发送数据。</p>
+<h2 id="KCP-RX"><a href="#KCP-RX" class="headerlink" title="KCP RX"></a>KCP RX</h2><p><code>KCP</code>提供了底层的输入接口<code>ikcp_input</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// when you received a low level packet (eg. UDP packet), call it</span></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">ikcp_input</span><span class="params">(ikcpcb *kcp, <span class="keyword">const</span> <span class="keyword">char</span> *data, <span class="keyword">long</span> size)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p>当接收到<code>KCP</code>报文时，调用<code>ikcp_input</code>会解析其协议字段，如果是数据报文，则会将解析完成后的数据存入<code>KCP</code>内部的接收队列。</p>
+<p>对于上层应用而言，需要调用<code>ickp_recv</code>从<code>KCP</code>内部的接收队列获取数据：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">// user/upper level recv: returns size, returns below zero for EAGAIN</span></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">ikcp_recv</span><span class="params">(ikcpcb *kcp, <span class="keyword">char</span> *buffer, <span class="keyword">int</span> len)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<h1 id="librte-ikcp"><a href="#librte-ikcp" class="headerlink" title="librte_ikcp"></a>librte_ikcp</h1><p>下面将根据<code>KCP</code>的使用方式，说明<code>librte_ikcp</code>的设计流程。</p>
+<h2 id="Initialization-and-data-structure"><a href="#Initialization-and-data-structure" class="headerlink" title="Initialization and data structure"></a>Initialization and data structure</h2><p>首先看<code>KCP</code>的初始化流程，最终返回了<code>ikcp</code>实例，所以<code>librte_ikcp</code>的封装也需要保存<code>ikcp</code>实例。除此之外，要基于<code>DPDK</code>的接口实现数据收发功能，需要指定发包接口和队列号，同时还需要IP地址，以及下一跳的MAC地址。</p>
+<p>综合以上需求，<code>rte_ikcp</code>定义如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * The RTE ikcp config structure.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rte_ikcp_config</span> &#123;</span></span><br><span class="line">	<span class="keyword">uint16_t</span> port_id;                   <span class="comment">/**&lt; Port id. */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> txq_id;                    <span class="comment">/**&lt; TX queue id of the port, used when RTE_IKCP_MQ is disabled. */</span></span><br><span class="line">	<span class="class"><span class="keyword">union</span> &#123;</span></span><br><span class="line">		<span class="keyword">uint32_t</span> ipv4;</span><br><span class="line">		<span class="keyword">uint8_t</span> ipv6[<span class="number">16</span>];</span><br><span class="line">	&#125; src_ip, dst_ip;                   <span class="comment">/**&lt; Addresses to send and receive. */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> src_port;                  <span class="comment">/**&lt; UDP port when sending. */</span></span><br><span class="line">	<span class="keyword">uint16_t</span> dst_port;                  <span class="comment">/**&lt; UDP port when receiving. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ether_addr</span> <span class="title">self_mac</span>;</span>     <span class="comment">/**&lt; MAC address of the port. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ether_addr</span> <span class="title">next_hop_mac</span>;</span> <span class="comment">/**&lt; MAC address of the next hop. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_mempool</span> *<span class="title">mempool</span>;</span>        <span class="comment">/**&lt; The mempool to allocate mbufs. */</span></span><br><span class="line">	<span class="keyword">uint32_t</span> flags;                     <span class="comment">/**&lt; Config flags. */</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * The RTE ikcp structure.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rte_ikcp</span> &#123;</span></span><br><span class="line">	ikcpcb kcp;                           <span class="comment">/**&lt; Internal kcp object. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ikcp_config</span> <span class="title">config</span>;</span>        <span class="comment">/**&lt; Internal config. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ring</span> *<span class="title">rx_queue</span>, *<span class="title">tx_queue</span>;</span> <span class="comment">/**&lt; RX/TX queues when RTE_IKCP_MQ is enabled. */</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>其中除了上面提到的必须的配置外，<code>rte_ikcp-&gt;rx_queue</code>和<code>rte_ikcp-&gt;tx_queue</code>是用于多队列模式的收发队列，在多队列章节会详细说明；<code>rte_ikcp-&gt;config-&gt;mempool</code>是用于底层发送函数申请<code>mbuf</code>用的<code>mempool</code>；<code>rte_ikcp-&gt;config.flags</code>是<code>rte_ikcp</code>相关的配置flag，取值如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_USED               (1 &lt;&lt; 0) <span class="comment">/**&lt; The ikcp structure is used or not. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_L3_TYPE_IPV4       (1 &lt;&lt; 1) <span class="comment">/**&lt; The kcp is using IPv4. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_L3_TYPE_IPV6       (1 &lt;&lt; 2) <span class="comment">/**&lt; The kcp is using IPv6. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_ENABLE_PRIVATE_LOG (1 &lt;&lt; 3) <span class="comment">/**&lt; Enable kcp internal log. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_MQ                 (1 &lt;&lt; 4) <span class="comment">/**&lt; Send/recv using multi queues. */</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> RTE_IKCP_L3_TYPE_MASK (RTE_IKCP_L3_TYPE_IPV4 | RTE_IKCP_L3_TYPE_IPV6)</span></span><br></pre></td></tr></table></figure>
+
+<p>对于各个flag：</p>
+<ul>
+<li>RTE_IKCP_USED：所有的<code>rte_ikcp</code>实例都存储在一个全局的静态数组内，<code>RTE_IKCP_USED</code>用于描述当前数组成员是否已经被使用；</li>
+<li>RTE_IKCP_L3_TYPE_IPV4：说明当前<code>rte_ikcp</code>实例中的IP地址是IPv4；</li>
+<li>RTE_IKCP_L3_TYPE_IPV6：说明当前<code>rte_ikcp</code>实例中的IP地址是IPv6；</li>
+<li>RTE_IKCP_ENABLE_PRIVATE_LOG：启用<code>KCP</code>的内部日志输出；</li>
+<li>RTE_IKCP_MQ：当前<code>rte_ikcp</code>实例为多队列模式。</li>
+</ul>
+<p><code>rte_ikcp</code>的实例初始化通过调用<code>rte_ikcp_create</code>进行：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * Create an ikcp object.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @param config</span></span><br><span class="line"><span class="comment"> *   Config structure of the ikcp object.</span></span><br><span class="line"><span class="comment"> * @param conv</span></span><br><span class="line"><span class="comment"> *   Conversation id between kcp endpoints and it must be unique for a specified conversation.</span></span><br><span class="line"><span class="comment"> * @param user</span></span><br><span class="line"><span class="comment"> *   User specified pointer and will be used in kcp output.</span></span><br><span class="line"><span class="comment"> * @return</span></span><br><span class="line"><span class="comment"> *   - The pointer of the ikcp object.</span></span><br><span class="line"><span class="comment"> *   - NULL on failure.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function">struct rte_ikcp *<span class="title">rte_ikcp_create</span><span class="params">(struct rte_ikcp_config config, <span class="keyword">uint32_t</span> conv, <span class="keyword">void</span> *user)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p>在<code>rte_ikcp_create</code>中已经为<code>ikcp</code>实例设置好了底层发送函数，所以无需额外调用<code>ikcp_set_output</code>。</p>
+<p>而底层发送函数的实现也很简单，从<code>rte_ikcp-&gt;config-&gt;mempool</code>中申请<code>mbuf</code>，再依据<code>rte_ikcp-&gt;config</code>中IP、MAC相关字段，设置<code>mbuf</code>的头部信息，最后发出。</p>
+<h2 id="FSM-update"><a href="#FSM-update" class="headerlink" title="FSM update"></a>FSM update</h2><p>对<code>KCP</code>的有限状态机进行维护需要调用<code>ikcp_update</code>，需要传入时钟参数，单位为<code>ms</code>，在<code>rte_ikcp</code>的封装中，用<code>tsc</code>寄存器的值完成了时钟计算，上层应用直接调用<code>rte_ikcp_update</code>即可，无需传入当前时钟：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">rte_ikcp_update</span><span class="params">(struct rte_ikcp *ikcp)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	ikcp_update(&amp;ikcp-&gt;kcp, (<span class="keyword">uint32_t</span>)((<span class="keyword">double</span>)rte_rdtsc() / rte_get_tsc_hz() * <span class="number">1000</span>));</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="TX"><a href="#TX" class="headerlink" title="TX"></a>TX</h2><p>发送流程没有任何改动，封装了一层接口<code>rte_ikcp_send</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_send</span><span class="params">(struct rte_ikcp *ikcp, <span class="keyword">const</span> <span class="keyword">char</span>* data, <span class="keyword">int32_t</span> len)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_send(&amp;ikcp-&gt;kcp, data, len);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>实际上还是将数据先存入<code>ikcp</code>的内部发送队列，由<code>ikcp</code>的有限状态机维护调用底层发送函数发出。</p>
+<h2 id="RX"><a href="#RX" class="headerlink" title="RX"></a>RX</h2><p>接收流程中，首先调用底层接收函数<code>rte_ikcp_input</code>完成原始数据的输入：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * Enqueue the data of the mbuf to the kcp internal rx queue.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * The mbuf is checked whether belongs to the rte_ikcp or not and freed</span></span><br><span class="line"><span class="comment"> * after enqueue sucessfully.</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * @param ikcp</span></span><br><span class="line"><span class="comment"> *   The pointer of an ikcp object.</span></span><br><span class="line"><span class="comment"> * @param mbuf</span></span><br><span class="line"><span class="comment"> *   The mbuf contains data to be input to the kcp.</span></span><br><span class="line"><span class="comment"> * @return</span></span><br><span class="line"><span class="comment"> *   - 0 on sucess.</span></span><br><span class="line"><span class="comment"> *   - Less than 0 on failure.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_input</span><span class="params">(struct rte_ikcp *ikcp, struct rte_mbuf *mbuf)</span></span>;</span><br></pre></td></tr></table></figure>
+
+<p>其中会用<code>mbuf</code>信息和<code>rte_ikcp-&gt;config</code>中的信息进行比较，丢弃不属于当前<code>rte_ikcp</code>的报文，最后调用<code>ikcp_input</code>将数据传入<code>ikcp</code>，最后将释放<code>mbuf</code>。</p>
+<p>而上层应用获取数据的方式和<code>ikcp</code>一致，从<code>ikcp</code>内部队列获取，只做了一层封装<code>rte_ikcp_recv</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_recv</span><span class="params">(struct rte_ikcp *ikcp, <span class="keyword">char</span>* data, <span class="keyword">int32_t</span> len)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_recv(&amp;ikcp-&gt;kcp, data, len);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="Multi-queue-support"><a href="#Multi-queue-support" class="headerlink" title="Multi-queue support"></a>Multi-queue support</h2><p><code>ikcp</code>提供的接口本身不是线程安全的，而对<code>DPDK</code>应用而言，通常又会对性能有一定要求，所以<code>librte_ikcp</code>实现了多队列支持，要使用多队列功能，只需要在调用<code>rte_ikcp_create</code>时，为参数<code>rte_ikcp_config-&gt;flags</code>置位<code>RTE_IKCP_MQ</code>即可。</p>
+<p>首先要确定的一点，由于<code>ikcp</code>接口不是线程安全的，所以对<code>ikcp</code>的有限状态机维护，还是只能由一个线程去完成，能够实现多队列支持的，只有数据收发过程。</p>
+<p>简单来说，单队列收发模式下，收包时外层直接调用<code>rte_ikcp_input</code>，发包时将报文从<code>rte_ikcp-&gt;config</code>中指定的接口和队列发出；多队列收发模式下，发送和接收都由队列实现：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * The RTE ikcp structure.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">rte_ikcp</span> &#123;</span></span><br><span class="line">	ikcpcb kcp;                           <span class="comment">/**&lt; Internal kcp object. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ikcp_config</span> <span class="title">config</span>;</span>        <span class="comment">/**&lt; Internal config. */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_ring</span> *<span class="title">rx_queue</span>, *<span class="title">tx_queue</span>;</span> <span class="comment">/**&lt; RX/TX queues when RTE_IKCP_MQ is enabled. */</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>收包时，每个收包队列将收取到的报文入队<code>rte_ikcp-&gt;rx_queue</code>，<code>rte_ikcp_input_bulk</code>再调用<code>rte_ikcp_input</code>完成队列元素的逐个入队：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_input_bulk</span><span class="params">(struct rte_ikcp *ikcp)</span> </span>&#123;</span><br><span class="line">	<span class="keyword">int</span> nb_rx, i, count;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rte_mbuf</span> *<span class="title">mbufs</span>[<span class="title">IKCP_INPUT_BURST_SIZE</span>];</span></span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (!(ikcp-&gt;config.flags &amp; RTE_IKCP_MQ)) &#123;</span><br><span class="line">		RTE_LOG(DEBUG, IKCP, <span class="string">&quot;Multi queue is not enabled.\n&quot;</span>);</span><br><span class="line">		<span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	count = RTE_MIN(rte_ring_count(ikcp-&gt;rx_queue), IKCP_INPUT_BURST_SIZE);</span><br><span class="line">	<span class="keyword">if</span> (!count) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	nb_rx = rte_ring_sc_dequeue_bulk(ikcp-&gt;rx_queue, (<span class="keyword">void</span> **)mbufs, count, <span class="literal">NULL</span>);</span><br><span class="line">	<span class="keyword">if</span> (!nb_rx) &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i &lt; nb_rx; ++i) &#123;</span><br><span class="line">		rte_ikcp_input(ikcp, mbufs[i]);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>在多队列收包时，上层调用除了要完成原始报文入队外，还应周期性调用<code>rte_ikcp_input_bulk</code>完成真正的报文入队。</p>
+<p>发包时，<code>librte_ikcp</code>会将需要发出的报文入队<code>rte_ikcp-&gt;tx_queue</code>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">inline</span> <span class="keyword">int32_t</span> <span class="title">ikcp_output</span><span class="params">(<span class="keyword">const</span> <span class="keyword">char</span> *buf, <span class="keyword">int32_t</span> len, ikcpcb *kcp, <span class="keyword">void</span> *user)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">.......</span><br><span class="line">	<span class="keyword">if</span> (ikcp-&gt;config.flags &amp; RTE_IKCP_MQ) &#123;</span><br><span class="line">		nb_tx = (<span class="keyword">int32_t</span>)rte_ring_sp_enqueue(ikcp-&gt;tx_queue, head) ? <span class="number">0</span> : <span class="number">1</span>;</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">else</span> &#123;</span><br><span class="line">		nb_tx = (<span class="keyword">int32_t</span>)rte_eth_tx_burst(port_id, txq_id, &amp;head, <span class="number">1</span>);</span><br><span class="line">		rte_pktmbuf_free(head);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> nb_tx;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>在多队列发包时，上层调用也需要周期性地轮询<code>rte_ikcp-&gt;tx_queue</code>，将可用报文发出。</p>
+<h2 id="Other-KCP-APIs"><a href="#Other-KCP-APIs" class="headerlink" title="Other KCP APIs"></a>Other KCP APIs</h2><p><code>rte_ikcp</code>对一些<code>KCP</code>提供的API也进行了封装：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">rte_ikcp_flush</span><span class="params">(struct rte_ikcp *ikcp)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	ikcp_flush(&amp;ikcp-&gt;kcp);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">rte_ikcp_nodelay</span><span class="params">(struct rte_ikcp *ikcp, <span class="keyword">int32_t</span> nodelay,</span></span></span><br><span class="line"><span class="params"><span class="function">					  <span class="keyword">int32_t</span> interval, <span class="keyword">int32_t</span> resend, <span class="keyword">int32_t</span> nc)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	RTE_SET_USED(ikcp_nodelay(&amp;ikcp-&gt;kcp, nodelay, interval, resend, nc));</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_peeksize</span><span class="params">(struct rte_ikcp *ikcp)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_peeksize(&amp;ikcp-&gt;kcp);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_setmtu</span><span class="params">(struct rte_ikcp *ikcp, <span class="keyword">int32_t</span> mtu)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_setmtu(&amp;ikcp-&gt;kcp, mtu);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_wndsize</span><span class="params">(struct rte_ikcp *ikcp, <span class="keyword">int32_t</span> sndwnd, <span class="keyword">int32_t</span> rcvwnd)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_wndsize(&amp;ikcp-&gt;kcp, sndwnd, rcvwnd);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int32_t</span> <span class="title">rte_ikcp_waitsnd</span><span class="params">(struct rte_ikcp *ikcp)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">return</span> ikcp_waitsnd(&amp;ikcp-&gt;kcp);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h1 id="Example"><a href="#Example" class="headerlink" title="Example"></a>Example</h1><p>除了<code>librte_ikcp</code>之外，还提供了一个示例程序<code>dpdk-ikcp</code>，用于简单展示<code>librte_ikcp</code>功能。</p>
+<p>其包含两种可用的<code>KCP</code>后端，分别为<code>socket</code>后端和<code>DPDK</code>后端：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">[root@localhost examples]<span class="comment"># ./dpdk-ikcp -h</span></span><br><span class="line">Usage: ./dpdk-ikcp [options]</span><br><span class="line">options:</span><br><span class="line">  --socket-kcp: Use kcp socket backend</span><br><span class="line">  --dpdk-kcp: Use kcp pmd backend</span><br></pre></td></tr></table></figure>
+
+<p>其中，<code>socket</code>后端使用UDP socket实现<code>KCP</code>的数据收发，而<code>DPDK</code>后端使用<code>librte_ikcp</code>实现。</p>
+<p>使用不同的后端类型，对应了不同的参数选项：</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># dpdk backend.</span></span><br><span class="line">[root@localhost examples]<span class="comment"># ./dpdk-ikcp --dpdk-kcp -- -h</span></span><br><span class="line">./dpdk-ikcp --dpdk-kcp [EAL options] -- [--debug] [-4|-6] --device PCI --src SRC --dst DST --next-hop-mac M:M:M:M:M:M</span><br><span class="line">                -4: Use IPv4 (default)</span><br><span class="line">                -6: Use IPv6</span><br><span class="line">                -v: Display verbose send/recv details</span><br><span class="line">                --device: Assign the PCI address of device</span><br><span class="line">                --src: Assign the <span class="built_in">source</span> IP</span><br><span class="line">                --dst: Assign the destination IP</span><br><span class="line">                --next-hop-mac: Assign the MAC address of the next hop</span><br><span class="line">                --multi-queue: Use multi queues to transmit</span><br><span class="line">                --debug: Enable kcp private <span class="built_in">log</span></span><br><span class="line">                </span><br><span class="line"><span class="comment"># socket backend.</span></span><br><span class="line">[root@localhost examples]<span class="comment"># ./dpdk-ikcp --socket-kcp -h</span></span><br><span class="line">./dpdk-ikcp --socket-kcp [-4|-6] --dst DST</span><br><span class="line">                -4: IP address is IPv4 (default)</span><br><span class="line">                -6: IP address is IPv6</span><br><span class="line">                -v: Display verbose send/recv details</span><br><span class="line">                --src: Assign the <span class="built_in">source</span> IP</span><br><span class="line">                --dst: Assign the destination IP</span><br></pre></td></tr></table></figure>
+
+<p>不论哪种后端，都支持<code>send</code>、<code>stop</code>和<code>exit</code>三种命令，使用该示例程序可以方便地测试<code>librte_ikcp</code>和常用的基于UDP socket的<code>KCP</code>的通信功能：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">[root@localhost dpdk-kcp]# ./dpdk-ikcp --socket-kcp --dst 1.1.1.1 --src 1.1.1.2 -v</span><br><span class="line">cli &gt; timestamp: 1550194806 recv 0 pkts in last 1000 milliseconds.</span><br><span class="line">timestamp: 1550195807 recv 0 pkts in last 1000 milliseconds.</span><br><span class="line">timestamp: 1550196808 recv 0 pkts in last 1000 milliseconds.</span><br><span class="line"></span><br><span class="line">cli &gt; support commands: send stop exit</span><br></pre></td></tr></table></figure>
+
+
+
+ 
+      <!-- reward -->
+      
+    </div>
+    
+
+    <!-- copyright -->
+    
+    <div class="declare">
+      <ul class="post-copyright">
+        <li>
+          <i class="ri-copyright-line"></i>
+          <strong>Copyright： </strong>
+          
+          Copyright is owned by the author. For commercial reprints, please contact the author for authorization. For non-commercial reprints, please indicate the source.
+          
+        </li>
+      </ul>
+    </div>
+    
+    <footer class="article-footer">
+       
+<div class="share-btn">
+      <span class="share-sns share-outer">
+        <i class="ri-share-forward-line"></i>
+        分享
+      </span>
+      <div class="share-wrap">
+        <i class="arrow"></i>
+        <div class="share-icons">
+          
+          <a class="weibo share-sns" href="javascript:;" data-type="weibo">
+            <i class="ri-weibo-fill"></i>
+          </a>
+          <a class="weixin share-sns wxFab" href="javascript:;" data-type="weixin">
+            <i class="ri-wechat-fill"></i>
+          </a>
+          <a class="qq share-sns" href="javascript:;" data-type="qq">
+            <i class="ri-qq-fill"></i>
+          </a>
+          <a class="douban share-sns" href="javascript:;" data-type="douban">
+            <i class="ri-douban-line"></i>
+          </a>
+          <!-- <a class="qzone share-sns" href="javascript:;" data-type="qzone">
+            <i class="icon icon-qzone"></i>
+          </a> -->
+          
+          <a class="facebook share-sns" href="javascript:;" data-type="facebook">
+            <i class="ri-facebook-circle-fill"></i>
+          </a>
+          <a class="twitter share-sns" href="javascript:;" data-type="twitter">
+            <i class="ri-twitter-fill"></i>
+          </a>
+          <a class="google share-sns" href="javascript:;" data-type="google">
+            <i class="ri-google-fill"></i>
+          </a>
+        </div>
+      </div>
+</div>
+
+<div class="wx-share-modal">
+    <a class="modal-close" href="javascript:;"><i class="ri-close-circle-line"></i></a>
+    <p>扫一扫，分享到微信</p>
+    <div class="wx-qrcode">
+      <img src="//api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://martzki.github.io/2023/01/24/Introduce-of-librte-ikcp/" alt="微信分享二维码">
+    </div>
+</div>
+
+<div id="share-mask"></div>  
+  <ul class="article-tag-list" itemprop="keywords"><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/dpdk/" rel="tag">dpdk</a></li><li class="article-tag-list-item"><a class="article-tag-list-link" href="/tags/network/" rel="tag">network</a></li></ul>
+
+    </footer>
+  </div>
+
+   
+  <nav class="article-nav">
+    
+    
+      <a href="/2023/01/21/Instance-lock-of-shell-script/" class="article-nav-link">
+        <strong class="article-nav-caption">下一篇</strong>
+        <div class="article-nav-title">Instance lock of shell script</div>
+      </a>
+    
+  </nav>
+
+   
+<!-- valine评论 -->
+<div id="vcomments-box">
+  <div id="vcomments"></div>
+</div>
+<script src="//cdn1.lncld.net/static/js/3.0.4/av-min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/valine@1.4.14/dist/Valine.min.js"></script>
+<script>
+  new Valine({
+    el: "#vcomments",
+    app_id: "bQj12c6UP3MkjKFNgS9oxNBc-gzGzoHsz",
+    app_key: "8dKOwm145GvyNjmzkcq5dgbE",
+    path: window.location.pathname,
+    avatar: "monsterid",
+    placeholder: "给我的文章加点评论吧~",
+    recordIP: true,
+  });
+  const infoEle = document.querySelector("#vcomments .info");
+  if (infoEle && infoEle.childNodes && infoEle.childNodes.length > 0) {
+    infoEle.childNodes.forEach(function (item) {
+      item.parentNode.removeChild(item);
+    });
+  }
+</script>
+<style>
+  #vcomments-box {
+    padding: 5px 30px;
+  }
+
+  @media screen and (max-width: 800px) {
+    #vcomments-box {
+      padding: 5px 0px;
+    }
+  }
+
+  #vcomments-box #vcomments {
+    background-color: #fff;
+  }
+
+  .v .vlist .vcard .vh {
+    padding-right: 20px;
+  }
+
+  .v .vlist .vcard {
+    padding-left: 10px;
+  }
+</style>
+
+ 
+   
+     
+</article>
+
+</section>
+      <footer class="footer">
+  <div class="outer">
+    <ul>
+      <li>
+        Copyrights &copy;
+        2021-2023
+        <i class="ri-heart-fill heart_icon"></i> Martzki
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+      </li>
+    </ul>
+    <ul>
+      <li>
+        
+        
+        <span>
+  <span><i class="ri-user-3-fill"></i>Visitors:<span id="busuanzi_value_site_uv"></span></span>
+  <span class="division">|</span>
+  <span><i class="ri-eye-fill"></i>Views:<span id="busuanzi_value_page_pv"></span></span>
+</span>
+        
+      </li>
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      
+    </ul>
+    <ul>
+      <li>
+        <!-- cnzz统计 -->
+        
+        <script type="text/javascript" src='https://s9.cnzz.com/z_stat.php?id=1278069914&amp;web_id=1278069914'></script>
+        
+      </li>
+    </ul>
+  </div>
+</footer>    
+    </main>
+    <div class="float_btns">
+      <div class="totop" id="totop">
+  <i class="ri-arrow-up-line"></i>
+</div>
+
+<div class="todark" id="todark">
+  <i class="ri-moon-line"></i>
+</div>
+
+    </div>
+    <aside class="sidebar on">
+      <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/avatar.JPG" alt="Lost Stars"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">Home</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">Archives</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/categories">Categories</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags">Tags</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/tags/Travel/">Travel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/2022/01/09/About-Me/">About Me</a>
+    </li>
+    
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      
+      <a class="nav-item-link nav-item-search"  title="Search">
+        <i class="ri-search-line"></i>
+      </a>
+      
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+    </aside>
+    <div id="mask"></div>
+
+<!-- #reward -->
+<div id="reward">
+  <span class="close"><i class="ri-close-line"></i></span>
+  <p class="reward-p"><i class="ri-cup-line"></i>请我喝杯咖啡吧~</p>
+  <div class="reward-box">
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/alipay.jpg">
+      <span class="reward-type">支付宝</span>
+    </div>
+    
+    
+    <div class="reward-item">
+      <img class="reward-img" src="https://cdn.jsdelivr.net/gh/Shen-Yu/cdn/img/wechat.jpg">
+      <span class="reward-type">微信</span>
+    </div>
+    
+  </div>
+</div>
+    
+<script src="/js/jquery-3.6.0.min.js"></script>
+ 
+<script src="/js/lazyload.min.js"></script>
+
+<!-- Tocbot -->
+ 
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: ".tocbot",
+    contentSelector: ".article-entry",
+    headingSelector: "h1, h2, h3, h4, h5, h6",
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    scrollContainer: "main",
+    positionFixedSelector: ".tocbot",
+    positionFixedClass: "is-position-fixed",
+    fixedSidebarOffset: "auto",
+  });
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.js"></script>
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/jquery-modal@0.9.2/jquery.modal.min.css"
+/>
+<script src="https://cdn.jsdelivr.net/npm/justifiedGallery@3.7.0/dist/js/jquery.justifiedGallery.min.js"></script>
+
+<script src="/dist/main.js"></script>
+
+<!-- ImageViewer -->
+ <!-- Root element of PhotoSwipe. Must have class pswp. -->
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    <!-- Background of PhotoSwipe. 
+         It's a separate element as animating opacity is faster than rgba(). -->
+    <div class="pswp__bg"></div>
+
+    <!-- Slides wrapper with overflow:hidden. -->
+    <div class="pswp__scroll-wrap">
+
+        <!-- Container that holds slides. 
+            PhotoSwipe keeps only 3 of them in the DOM to save memory.
+            Don't modify these 3 pswp__item elements, data is added later on. -->
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        <!-- Default (PhotoSwipeUI_Default) interface on top of sliding area. Can be changed. -->
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                <!--  Controls are self-explanatory. Order can be changed. -->
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" style="display:none" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                <!-- Preloader demo http://codepen.io/dimsemenov/pen/yyBWoR -->
+                <!-- element will get class pswp__preloader--active when preloader is running -->
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css">
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"></script>
+
+<script>
+    function viewer_init() {
+        let pswpElement = document.querySelectorAll('.pswp')[0];
+        let $imgArr = document.querySelectorAll(('.article-entry img:not(.reward-img)'))
+
+        $imgArr.forEach(($em, i) => {
+            $em.onclick = () => {
+                // slider展开状态
+                // todo: 这样不好，后面改成状态
+                if (document.querySelector('.left-col.show')) return
+                let items = []
+                $imgArr.forEach(($em2, i2) => {
+                    let img = $em2.getAttribute('data-idx', i2)
+                    let src = $em2.getAttribute('data-target') || $em2.getAttribute('src')
+                    let title = $em2.getAttribute('alt')
+                    // 获得原图尺寸
+                    const image = new Image()
+                    image.src = src
+                    items.push({
+                        src: src,
+                        w: image.width || $em2.width,
+                        h: image.height || $em2.height,
+                        title: title
+                    })
+                })
+                var gallery = new PhotoSwipe(pswpElement, PhotoSwipeUI_Default, items, {
+                    index: parseInt(i)
+                });
+                gallery.init()
+            }
+        })
+    }
+    viewer_init()
+</script> 
+<!-- MathJax -->
+
+<!-- Katex -->
+
+<!-- busuanzi  -->
+ 
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+ 
+<!-- ClickLove -->
+
+<!-- ClickBoom1 -->
+
+<!-- ClickBoom2 -->
+
+<!-- CodeCopy -->
+ 
+<link rel="stylesheet" href="/css/clipboard.css">
+ <script src="https://cdn.jsdelivr.net/npm/clipboard@2/dist/clipboard.min.js"></script>
+<script>
+  function wait(callback, seconds) {
+    var timelag = null;
+    timelag = window.setTimeout(callback, seconds);
+  }
+  !function (e, t, a) {
+    var initCopyCode = function(){
+      var copyHtml = '';
+      copyHtml += '<button class="btn-copy" data-clipboard-snippet="">';
+      copyHtml += '<i class="ri-file-copy-2-line"></i><span>COPY</span>';
+      copyHtml += '</button>';
+      $(".highlight .code pre").before(copyHtml);
+      $(".article pre code").before(copyHtml);
+      var clipboard = new ClipboardJS('.btn-copy', {
+        target: function(trigger) {
+          return trigger.nextElementSibling;
+        }
+      });
+      clipboard.on('success', function(e) {
+        let $btn = $(e.trigger);
+        $btn.addClass('copied');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-checkbox-circle-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPIED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-checkbox-circle-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+      clipboard.on('error', function(e) {
+        e.clearSelection();
+        let $btn = $(e.trigger);
+        $btn.addClass('copy-failed');
+        let $icon = $($btn.find('i'));
+        $icon.removeClass('ri-file-copy-2-line');
+        $icon.addClass('ri-time-line');
+        let $span = $($btn.find('span'));
+        $span[0].innerText = 'COPY FAILED';
+        
+        wait(function () { // 等待两秒钟后恢复
+          $icon.removeClass('ri-time-line');
+          $icon.addClass('ri-file-copy-2-line');
+          $span[0].innerText = 'COPY';
+        }, 2000);
+      });
+    }
+    initCopyCode();
+  }(window, document);
+</script>
+ 
+<!-- CanvasBackground -->
+
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ theme: "forest" });
+  }
+</script>
+
+
+    
+    
+
+  </div>
+</body>
+
+</html>
