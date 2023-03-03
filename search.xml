@@ -23,6 +23,73 @@
       </tags>
   </entry>
   <entry>
+    <title>VXLAN Tunnel TSO</title>
+    <url>/2023/03/03/VXLAN-Tunnel-TSO/</url>
+    <content><![CDATA[<h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p>overlay网络提供了租户网络东西向连通的能力，但引入了报文封装的代价。常见的网络设备的<code>MTU</code>通常为<code>1500</code>，当虚拟机发送的报文完成overlay封装后的报文长度超过overlay网络的<code>MTU</code>时，就需要将封装后的报文分片后发送。</p>
+<p>以VXLAN为例，一个需要分片的VXLAN巨帧将按照<code>MTU</code>被分成若干小于<code>MTU</code>的VXLAN报文，这部分工作传统都是由软件实现的。</p>
+<p>通常来说，<code>TSO</code>是一个大多数网卡都支持的卸载功能，可以将TCP报文分段工作卸载到网卡进行。随着技术发展，一些网卡甚至可以支持隧道<code>TSO</code>，将上述隧道TCP巨帧的分段工作offload到网卡实现。</p>
+<span id="more"></span>
+
+<h1 id="TSO-vs-UFO"><a href="#TSO-vs-UFO" class="headerlink" title="TSO vs UFO"></a>TSO vs UFO</h1><p>TCP在SYN报文中通过选项协商传输的<code>MSS</code>用于TCP分段。TCP在报文发送时，会将<code>MSS</code>和协议首部信息传递给网卡，网卡再根据这些信息进行TCP分段，即<code>TSO</code>（TCP Segmentation Offload）。如果网卡不支持<code>TSO</code>，以内核协议栈为例，则会进入<code>GSO</code>，即软件分片（GSO同时支持UDP）。</p>
+<p>而UDP协议没有自身的分片功能，对于超长报文，依赖IP层的分片功能实现分片，其分片流程就是将payload分为若干份，复制到不同的IP分片，每个IP分片的首部除了长度、分片偏移以外，都是一样的。由于IP协议自身也没有保证可靠性，IP报文出现分片的场景，只要有任意1个分片没有收到，都会造成整个IP报文重组失败，所以一般情况下都需要尽量避免IP分片。</p>
+<p>相对于TCP分段而言，UDP的分片实现比较简单，一般是软件实现；而TCP分段不仅每个分段都是单独的IP报文，每个分段自身也需要重新计算校验和，以及设置首部字段等，工作量相对UDP分片而言大很多，所以很多网卡实现了<code>TSO</code>功能。</p>
+<p>通常网卡不会实现<code>UFO</code>（UDP Fragment Offload），但并不意味着所有网卡都不会，比如虚拟化场景下，Guest内部进行UDP分片会造成大量的CPU消耗，此时就可以将UDP分段的功能卸载到Host进行，以减少Guest的CPU消耗，如virtio-net的<code>VIRTIO_NET_F_HOST_UFO</code>、<code>VIRTIO_NET_F_GUEST_UFO</code>特性。</p>
+<p>如果在TCP巨帧的基础上封装了一层UDP隧道后，导致TCP分段需要用软件实现，将会使隧道下的TCP性能大打折扣，所以一些网卡厂商实现了基于隧道的<code>TSO</code>。</p>
+<h1 id="VXLAN-TSO-Offload"><a href="#VXLAN-TSO-Offload" class="headerlink" title="VXLAN TSO Offload"></a>VXLAN TSO Offload</h1><p>对于一些支持<code>VXLAN TSO Offload</code>的网卡，可以通过<code>ethtool</code>查看：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line"><span class="comment"># ethtool -k eth9 | grep tnl</span></span><br><span class="line">tx-udp_tnl-segmentation: on</span><br><span class="line">tx-udp_tnl-csum-segmentation: on</span><br></pre></td></tr></table></figure>
+
+<p>其中<code>tx-udp_tnl-segmentation</code>和<code>tx-udp_tnl-csum-segmentation</code>都表示硬件支持基于UDP隧道封装的TCP报文的分段<a href="https://www.kernel.org/doc/Documentation/networking/vxlan.rst">^1</a>。</p>
+<p>当然，所有卸载功能，都是需要驱动配合的。对DPDK而言，是否支持对于的隧道卸载，需要关注特定PMD的是否支持以下特性：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_VXLAN_TNL_TSO    0x00000200    <span class="comment">/**&lt; Used for tunneling packet. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_GRE_TNL_TSO      0x00000400    <span class="comment">/**&lt; Used for tunneling packet. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_IPIP_TNL_TSO     0x00000800    <span class="comment">/**&lt; Used for tunneling packet. */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_GENEVE_TNL_TSO   0x00001000    <span class="comment">/**&lt; Used for tunneling packet. */</span></span></span><br><span class="line">......</span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * Device supports generic UDP tunneled packet TSO.</span></span><br><span class="line"><span class="comment"> * Application must set PKT_TX_TUNNEL_UDP and other mbuf fields required</span></span><br><span class="line"><span class="comment"> * for tunnel TSO.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_UDP_TNL_TSO      0x00040000</span></span><br><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * Device supports generic IP tunneled packet TSO.</span></span><br><span class="line"><span class="comment"> * Application must set PKT_TX_TUNNEL_IP and other mbuf fields required</span></span><br><span class="line"><span class="comment"> * for tunnel TSO.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_IP_TNL_TSO       0x00080000</span></span><br><span class="line"><span class="comment">/** Device supports outer UDP checksum */</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> DEV_TX_OFFLOAD_OUTER_UDP_CKSUM  0x00100000</span></span><br></pre></td></tr></table></figure>
+
+<p>可以看到DPDK的tunnel offload特性具体到协议类型，对于一些高级的网卡，以<code>mlx5</code>为例，支持任意UDP隧道的<code>TSO</code>卸载，即<code>DEV_TX_OFFLOAD_UDP_TNL_TSO</code>。</p>
+<p>要使用<code>VXLAN TSO offload</code>，需要调用<code>rte_eth_dev_configure</code>在<code>port</code>的<code>tx_mode</code>中的<code>offload</code>将对应的卸载属性置位。</p>
+<p>其实对所有的offload而言，都是驱动和硬件配合实现的，硬件虽然计算能力很快，但却实现简单，比如对协议的解析，没办法像软件一样做的灵活，所以需要由驱动传递offload所需的<code>metadata</code>。以计算校验和为例，硬件需要知道校验和的起始地址、长度等，再进行校验和计算。</p>
+<p>对<code>VXLAN TSO offload</code>而言，需要设置如下<code>meatadata</code>：</p>
+<ul>
+<li><code>mbuf-&gt;ol_flags</code>：<ul>
+<li><code>PKT_TX_TUNNEL_VXLAN</code>：表明这是一个VXLAN报文。</li>
+<li><code>PKT_TX_TCP_SEG</code>：表明需要对报文做<code>TSO</code>。</li>
+<li><code>PKT_TX_OUTER_IP_CKSUM</code>：在外层是IPv4时需要置位此flag。因为做了<code>TSO</code>以后外层IPv4的payload长度会变化，需要重新计算外层IPv4的校验和。</li>
+</ul>
+</li>
+<li><code>mbuf-&gt;outer_l2_len</code>：隧道外层的L2长度。</li>
+<li><code>mbuf-&gt;outer_l3_len</code>：隧道外层的L3长度。</li>
+<li><code>mbuf-&gt;l2_len</code>：隧道外层L4头部到隧道内层L2尾部的长度。</li>
+<li><code>mbuf-&gt;l3_len</code>：隧道内层L3长度。</li>
+<li><code>mbuf-&gt;tso_segsz</code>：<code>TSO</code>分段的大小，为0时不启用<code>TSO</code>。</li>
+</ul>
+<p>上述<code>metadata</code>中，内外层协议的长度可以为网卡提供校验和计算的依据，而<code>mbuf-&gt;tso_segsz</code>指定了每个TCP分段的大小，其值应该满足如下关系：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">mbuf-&gt;tso_segsz &lt;= MTU - (mbuf-&gt;outer_l2_len - RTE_ETHER_HDR_LEN) - mbuf-&gt;outer_l3_len - mbuf-&gt;l2_len - mbuf-&gt;l3_len</span><br></pre></td></tr></table></figure>
+
+<p><code>mbuf-&gt;tso_segsz</code>较小可能会导致TCP分段较多，传输效率不高；较大可能会导致最终的隧道报文超过<code>MTU</code>，在链路上无法正常传输。</p>
+<p>DPDK还有一个卸载属性<code>DEV_TX_OFFLOAD_OUTER_UDP_CKSUM</code>用于表明网卡可以计算外层的UDP校验和，但是支持的网卡较少。在不支持的该卸载属性时，通常将外层UDP的校验和设置为0，表示不计算校验和（UDP的校验和是可选字段）。</p>
+<h1 id="Experiment"><a href="#Experiment" class="headerlink" title="Experiment"></a>Experiment</h1><p>test-pmd的csum模式包含了对隧道报文的解析，包括卸载功能，所以用test-pmd配合virtio-user和scapy实现隧道报文的构造和发送（其实隧道相关的功能最好是使用examples/tep_termination ，但它必须对接virtio-net的虚拟机）：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">                                   +----------+</span><br><span class="line">                             +-----+ Test PMD +&lt;-------+</span><br><span class="line">                             |     +----------+        |</span><br><span class="line">                             |                         |</span><br><span class="line">                             v                         |</span><br><span class="line">  +---------+           +----+-----+          +--------+--------+         +-------+</span><br><span class="line">  | tcpdump |           | pmd_mlx5 |          | pmd_virtio_user |         | Scapy |</span><br><span class="line">  +----+----+           +----+-----+          +--------+--------+         +---+---+</span><br><span class="line">       ^                     |                         ^                      |</span><br><span class="line">       |                     |                         |                      v</span><br><span class="line">       |                     |                   +-----+-----+             +--+--+</span><br><span class="line">       |                     |                   | vhost net +&lt;------------+ Tap |</span><br><span class="line">       |                     |                   +-----------+             +-----+</span><br><span class="line">       |                     |</span><br><span class="line">       |                     v</span><br><span class="line">+-------------+        +-----+------+</span><br><span class="line">| Receive Nic |        | ConnectX 4 |</span><br><span class="line">+-------------+        +-----+------+</span><br><span class="line">       ^                     |</span><br><span class="line">       |      +--------+     |</span><br><span class="line">       +------+ Switch +&lt;----+</span><br><span class="line">              +--------+</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+
+<p>上述测试拓扑中，ConnectX-4的为port 0，virtio-user为port 1，需要设置port 1的peer为port 0的<code>mac</code>，这样从port 1接收到的报文会被转发到port 0，同时需要把port 0的peer设置为Receive NIC的<code>mac</code>，这样port 0接收到port 1转发过来的报文后，会将报文转发给Receive NIC。</p>
+<p>除此之外，还需要设置port的卸载属性等，以开启<code>VXLAN Tunnel TSO</code>功能：</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line"><span class="built_in">set</span> fwd csum</span><br><span class="line">port stop all</span><br><span class="line"><span class="built_in">set</span> eth-peer 0 78:d4:f1:5a:8d:9d <span class="comment"># 设置port 0的peer为Receive NIC</span></span><br><span class="line"><span class="built_in">set</span> eth-peer 1 08:c0:eb:6c:7b:c7 <span class="comment"># 设置port 1的peer为port 0</span></span><br><span class="line">port config 0 tx_offload outer_ipv4_cksum on</span><br><span class="line">port config 0 tx_offload vxlan_tnl_tso on</span><br><span class="line">port config 0 tx_offload tcp_tso on</span><br><span class="line">csum parse-tunnel on 0 <span class="comment"># 开启csum模式的隧道解析功能</span></span><br><span class="line">tunnel_tso <span class="built_in">set</span> 1410 0 <span class="comment"># 设置port 0的tunnel_tso为1410以启用tunnel TSO</span></span><br><span class="line">port start all</span><br><span class="line"><span class="built_in">set</span> verbose 100</span><br></pre></td></tr></table></figure>
+
+<p>test-pmd设置好了之后，将port 1对应的tap接口的<code>MTU</code>设置为<code>9000</code>，并通过scapy发送一条长度为<code>6000</code>的VXLAN隧道巨帧：</p>
+<figure class="highlight python"><table><tr><td class="code"><pre><span class="line"><span class="comment">#!/usr/bin/python</span></span><br><span class="line"><span class="keyword">from</span> scapy.<span class="built_in">all</span> <span class="keyword">import</span> *</span><br><span class="line"></span><br><span class="line">outer_l2 = Ether(dst=<span class="string">&#x27;78:d4:f1:5a:8d:9d&#x27;</span>, src=<span class="string">&#x27;00:50:56:91:f3:42&#x27;</span>, <span class="built_in">type</span>=<span class="number">0x0800</span>)</span><br><span class="line">outer_l3 = IP(src=<span class="string">&#x27;123.123.123.1&#x27;</span>, dst=<span class="string">&#x27;123.123.123.2&#x27;</span>)</span><br><span class="line">outer_l4 = UDP(dport=<span class="number">4789</span>, sport=<span class="number">54321</span>)</span><br><span class="line">outer_vxlan = VXLAN(vni=<span class="number">1000</span>)</span><br><span class="line">inner_l2 = Ether(dst=<span class="string">&#x27;11:11:11:11:11:11&#x27;</span>, src=<span class="string">&#x27;22:22:22:22:22:22&#x27;</span>, <span class="built_in">type</span>=<span class="number">0x0800</span>)</span><br><span class="line">inner_l3 = IP(src=<span class="string">&#x27;1.1.1.1&#x27;</span>, dst=<span class="string">&#x27;1.1.1.2&#x27;</span>)</span><br><span class="line">inner_l4 = TCP(dport=<span class="number">55555</span>, sport=<span class="number">44444</span>, flags=<span class="string">&#x27;A&#x27;</span>, seq=<span class="number">1001</span>, ack=<span class="number">2001</span>)</span><br><span class="line"></span><br><span class="line">data = Raw(RandString(size=<span class="number">6000</span>))</span><br><span class="line"></span><br><span class="line">pkt = outer_l2 / outer_l3 / outer_l4 / outer_vxlan / inner_l2 / inner_l3 / inner_l4 / data</span><br><span class="line"></span><br><span class="line">sendp(pkt, iface=<span class="string">&#x27;v0&#x27;</span>)</span><br></pre></td></tr></table></figure>
+
+<p>从test-pmd的发包输出可以看到，port 0通过发包函数发出的是一个长度为<code>6104</code>的巨帧报文：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 0/queue 0: sent 1 packets</span><br><span class="line">restore info: - no tunnel info - no outer header - no miss group</span><br><span class="line">  src=08:C0:EB:6C:7B:C7 - dst=78:D4:F1:5A:8D:9D - pool=mb_pool_0 - type=0x0800 - length=6104 - nb_segs=3 - sw ptype: L2_ETHER L3_IPV4 L4_UDP  - l2_len=14 - l3_len=20 - l4_len=8 - Send queue=0x0</span><br><span class="line">  ol_flags: RTE_MBUF_F_TX_IP_CKSUM RTE_MBUF_F_TX_L4_NO_CKSUM RTE_MBUF_F_TX_TCP_SEG RTE_MBUF_F_TX_IPV4 RTE_MBUF_F_TX_OUTER_IP_CKSUM RTE_MBUF_F_TX_OUTER_IPV4 RTE_MBUF_F_TX_TUNNEL_VXLAN</span><br></pre></td></tr></table></figure>
+
+<p>发送完成后，可以在Receive NIC上抓取到完成了分片的报文：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">15:52:33.770739 08:c0:eb:6c:7b:c7 &gt; 78:d4:f1:5a:8d:9d, ethertype IPv4 (0x0800), length 1514: (tos 0x0, ttl 64, id 1, offset 0, flags [none], proto UDP (17), length 1500)</span><br><span class="line">    123.123.123.1.54321 &gt; 123.123.123.2.4789: UDP, length 1472</span><br><span class="line">15:52:33.770786 08:c0:eb:6c:7b:c7 &gt; 78:d4:f1:5a:8d:9d, ethertype IPv4 (0x0800), length 1514: (tos 0x0, ttl 64, id 2, offset 0, flags [none], proto UDP (17), length 1500)</span><br><span class="line">    123.123.123.1.54321 &gt; 123.123.123.2.4789: UDP, length 1472</span><br><span class="line">15:52:33.770787 08:c0:eb:6c:7b:c7 &gt; 78:d4:f1:5a:8d:9d, ethertype IPv4 (0x0800), length 1514: (tos 0x0, ttl 64, id 3, offset 0, flags [none], proto UDP (17), length 1500)</span><br><span class="line">    123.123.123.1.54321 &gt; 123.123.123.2.4789: UDP, length 1472</span><br><span class="line">15:52:33.770835 08:c0:eb:6c:7b:c7 &gt; 78:d4:f1:5a:8d:9d, ethertype IPv4 (0x0800), length 1514: (tos 0x0, ttl 64, id 4, offset 0, flags [none], proto UDP (17), length 1500)</span><br><span class="line">    123.123.123.1.54321 &gt; 123.123.123.2.4789: UDP, length 1472</span><br><span class="line">15:52:33.770837 08:c0:eb:6c:7b:c7 &gt; 78:d4:f1:5a:8d:9d, ethertype IPv4 (0x0800), length 464: (tos 0x0, ttl 64, id 5, offset 0, flags [none], proto UDP (17), length 450)</span><br><span class="line">    123.123.123.1.54321 &gt; 123.123.123.2.4789: UDP, length 422</span><br></pre></td></tr></table></figure>
+
+<p>其中每个隧道报文的负载长度包含了VXLAN头部、内层以太网头部、内层IPv4头部和内层TCP头部，共62字节，每个分片包文的负载长度减掉这些首部长度，再加在一起：<code>1472 * 4 + 422 - 62 * 5</code>正好是<code>6000</code>，即原始负载长度。</p>
+]]></content>
+      <categories>
+        <category>Technology</category>
+      </categories>
+      <tags>
+        <tag>network</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>Introduce of librte_ikcp</title>
     <url>/2023/01/24/Introduce-of-librte-ikcp/</url>
     <content><![CDATA[<h1 id="Overview"><a href="#Overview" class="headerlink" title="Overview"></a>Overview</h1><p><code>KCP</code><a href="https://github.com/skywind3000/kcp">^1</a>是一个纯算法实现的ARQ协议，而<code>librte_ikcp</code><a href="https://github.com/Martzki/dpdk-kcp">^2</a>是我实现的一个基于<code>KCP</code>的<code>DPDK</code>接口风格的封装库。</p>
@@ -1123,7 +1190,7 @@
     <content><![CDATA[<blockquote>
 <p>God, tell us the reason youth is wasted on the young.</p>
 </blockquote>
-<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#x6d;&#x61;&#x72;&#x73;&#x31;&#52;&#56;&#x35;&#x30;&#64;&#103;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;">&#x6d;&#x61;&#x72;&#x73;&#x31;&#52;&#56;&#x35;&#x30;&#64;&#103;&#109;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#x6d;</a></p>
+<p>A coder mainly work on network virtualization dataplane development.<br>Email: <a href="mailto:&#109;&#x61;&#114;&#115;&#x31;&#52;&#56;&#53;&#x30;&#64;&#103;&#x6d;&#97;&#x69;&#108;&#46;&#x63;&#111;&#x6d;">&#109;&#x61;&#114;&#115;&#x31;&#52;&#56;&#53;&#x30;&#64;&#103;&#x6d;&#97;&#x69;&#108;&#46;&#x63;&#111;&#x6d;</a></p>
 <img src="/images/avatar.JPG" width="40%" height="40%">]]></content>
       <categories>
         <category>Other</category>
